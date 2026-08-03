@@ -35,6 +35,18 @@ import { whenReady } from "../core/gpuUtil.js";
 /**
  * Samples in the ribbon, and how long each survives.
  *
+ * The ribbon is deliberately *not* subtle. An earlier pass had it 19 cm wide, deep blue and
+ * gold, on the reasoning that a contrail is an afterimage and afterimages are faint. The
+ * reference art says otherwise: a swing throws a brilliant sheet with a white-hot middle,
+ * and a trail that has to be looked for is not doing the job. So this is 40 cm across, its
+ * core is hot rather than tinted, and the gold is gone — the reference has none, and a warm
+ * band on the inner edge was pulling the eye away from the temperature gradient that is the
+ * whole point.
+ *
+ * It reads as the *bright leading edge* of the swing; the broad striated body behind it is
+ * `slashArc`, a separate effect with its own lifetime. Together they are the reference: a
+ * hot edge with a wash trailing off it.
+ *
  * The longest strike in the combo is 0.44 s, and the ribbon has to outlast it or the arc
  * is clipped before the swing that made it has finished. A test asserts that relationship
  * rather than trusting these two files to be edited together — which is how it was caught
@@ -63,21 +75,16 @@ const LIFE = 0.50;
  * at the boundary of the geometry, which is why the first version of this was a sharp
  * band no matter what the gradient did.
  */
-const INNER = 0.85;
-const MARGIN = 0.03;
-
+const INNER = 0.52;
 /**
- * How far the point must move in a frame before the ribbon starts at all.
+ * Feather width past each edge of the ribbon, metres.
  *
- * Only a gate on *beginning* a trail, not on continuing one, and that distinction is
- * the whole fix for the trail appearing on some attacks and not others. Every strike
- * accelerates out of its coil — a fifth of the arc in the first half of the time — so
- * a per-sample speed gate rejected the entire opening of every swing, and on the
- * quick attacks, which are mostly opening, it rejected nearly all of them. Once a
- * strike is live every frame is sampled, and the ribbon's own geometry does the rest:
- * where the blade is slow, consecutive samples nearly coincide and there is almost no
- * ribbon to see. Speed shapes it for free, without a gate that can drop a whole swing.
+ * Widened with the ribbon. A feather is only soft in proportion to what it feathers: 3 cm
+ * either side of a 13 cm band is a third of it, and the same 3 cm on a 40 cm band is a hard
+ * edge with a hint of blur.
  */
+const MARGIN = 0.07;
+
 const MOVE_GATE = 0.02;
 
 /** Vertices across the ribbon: inner feather, inner, outer, outer feather. */
@@ -160,7 +167,7 @@ export class SwordTrail {
                 attributes: ["position", "uv"],
                 uniforms: [
                     "viewProjection", "cameraPos",
-                    "trailTint", "trailGold", "trailIntensity", "trailSeed",
+                    "trailTint", "trailHot", "trailIntensity", "trailSeed",
                 ],
                 shaderLanguage: ShaderLanguage.WGSL,
                 needAlphaBlending: true,
@@ -183,7 +190,11 @@ export class SwordTrail {
         // red down near a tenth is the only thing that keeps blue *blue* after the
         // tonemapper has compressed the top end.
         mat.setColor3("trailTint", new Color3(0.10, 0.46, 1.0));
-        mat.setColor3("trailGold", new Color3(1.0, 0.74, 0.30));
+        // The hot core, and it is not pure white. Additive light over snow already near the
+        // top of the range desaturates on its own, so (1,1,1) arrives washed out and drags
+        // the blue with it; keeping some blue in it is what leaves the whole thing reading
+        // as ice at temperature rather than as an overexposed streak.
+        mat.setColor3("trailHot", new Color3(0.82, 0.94, 1.0));
         mat.setFloat("trailSeed", this.seed);
         return mat;
     }

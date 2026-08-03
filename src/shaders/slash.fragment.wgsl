@@ -83,8 +83,12 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
     // had time to go out.
     let age = pow(along, 0.55);
 
-    var a = rim * age * streak * (1.0 - v * 0.82);
-    a = a + lead * rim * 0.55;
+    // Boldness. The sheet is the body of the effect and the reference art is mostly
+    // sheet, so this is not a subtle wash: the base is raised and the striations modulate
+    // it downward rather than the other way round, which keeps the whole crescent present
+    // instead of leaving it as a few bright threads over nothing.
+    var a = rim * age * (0.45 + 0.85 * streak) * (1.0 - v * 0.78) * 1.55;
+    a = a + lead * rim * 0.85;
 
     // Close to the camera the sheet fills the frame and additive light on that much of
     // the screen is a white-out. Pulled down hard inside a metre and a half, which is
@@ -95,7 +99,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
     // Colour last. The core is reached by brightness rather than by mixing toward white,
     // because an additive surface that is already at the top of the range desaturates
     // itself — so the mix only has to get it close and the tonemapper finishes the job.
-    let whiteness = core * (0.45 + 0.55 * streak) + lead * 0.5;
+    let whiteness = core * (0.55 + 0.55 * streak) + lead * 0.65;
     let tint = mix(uniforms.slashRim, uniforms.slashCore, clamp(whiteness, 0.0, 1.0));
 
     fragmentOutputs.color = vec4f(tint * a, a);

@@ -49,10 +49,20 @@ export async function run() {
     ok(MARGIN < (1 - INNER) * 0.86,
         "and is narrower than the blade span it feathers, " + MARGIN + " vs " +
         ((1 - INNER) * 0.86).toFixed(2));
-    // Thickness. The ribbon spans the blade from INNER to the point, plus a margin at
-    // each end; a contrail that is wider than it is convincing reads as a banner.
+    // Thickness. The ribbon spans the blade from INNER to the point, plus a margin at each
+    // end.
+    //
+    // The bound used to be 25 cm, on the reasoning that a contrail wider than that reads as
+    // a banner. That was wrong about what this effect is for: the reference art is a bold
+    // sheet, and a trail that has to be looked for is not doing its job. It is now the
+    // bright leading edge of a swing rather than a thread behind it, so the assertion is
+    // that it is *substantial* — with an upper bound only to catch a ribbon that has grown
+    // wider than the blade is long, which would read as a cape.
     const width = (1 - INNER) * 0.86 + MARGIN * 2;
-    ok(width < 0.25, "the whole ribbon is under 25 cm across, got " + width.toFixed(2) + " m");
+    ok(width > 0.35,
+        "the ribbon is bold rather than a thread, got " + width.toFixed(2) + " m");
+    ok(width < 0.86,
+        "and no wider than the blade is long, got " + width.toFixed(2) + " m");
 
     // The shader's span must match the vertex table's, or the feather lands in the
     // wrong place: the blade's span would fade and the margin would be solid.
@@ -67,11 +77,11 @@ export async function run() {
     ok(Math.abs(across[2] - hi) < 1e-6,
         `and the outer one on SPAN_HI (${across[2]} vs ${hi})`);
 
-    // Every bright line must sit inside the blade's span rather than out in the
-    // feather, where coverage is fading and it would be invisible. There are two now:
-    // the ice core near the point and the gold core on the inner side.
+    // Every bright line must sit inside the blade's span rather than out in the feather,
+    // where coverage is fading and it would be thrown away. There are two: the broad hot
+    // core just inside the point, and a tighter highlight on the leading edge itself.
     const cores = [...frag.matchAll(/\(y - ([0-9.]+)\)/g)].map((m) => parseFloat(m[1]));
-    ok(cores.length === 2, "two bright lines across the ribbon, got " + cores.length);
+    ok(cores.length === 2, "two bright bands across the ribbon, got " + cores.length);
 
     // Saturation survives additive blending only if the channel ratio is extreme: a
     // pale blue arrives at already-bright snow and reads as white. Assert the tint is
@@ -88,10 +98,21 @@ export async function run() {
     for (const c of cores) {
         ok(c > lo && c < hi, `a core line at ${c} is inside the blade span ${lo}..${hi}`);
     }
-    // Gold inside, ice outside — the whole point of the two-colour split. If they ever
-    // cross, the ribbon is warm at the tip and cold at the hilt, which is backwards.
-    ok(Math.min(...cores) < 0.5 && Math.max(...cores) > 0.5,
-        "one core sits on the inner half and one on the outer");
+    // Both bands live on the outer half, near the point.
+    //
+    // They used to straddle the middle — a gold band inside and an ice one outside. The
+    // gold is gone with the reference's palette, and what replaced it is a temperature
+    // gradient running the other way: cold and dim at the hilt end, hot and bright at the
+    // edge. Two bands on the inner half would put the brightest part of the ribbon where
+    // the blade was moving slowest, which is backwards.
+    ok(Math.min(...cores) > 0.5,
+        "both bright bands sit on the outer half, toward the point");
+    ok(Math.max(...cores) < hi,
+        "and inside the span, not on its boundary where coverage is already fading");
+    ok(!/trailGold/.test(frag),
+        "the gold is gone — the reference has none, and a warm inner band pulls the eye " +
+        "off the hot-to-cold gradient that is the whole read");
+    ok(/uniform trailHot/.test(frag), "and a hot core has replaced it");
 
     // A whole strike must fit inside the trail's life, or the ribbon is shorter than
     // the swing that made it and the arc looks clipped.

@@ -58,6 +58,7 @@ const GRAINS_PER_SEC = 90;
 const _in = new Vector3();
 const _out = new Vector3();
 const _prev = new Vector3();
+const _travel = new Vector3();
 
 export class SlashArc {
     /**
@@ -137,6 +138,9 @@ export class SlashArc {
         // holding a little blue in it is what leaves the sheet reading as ice rather than
         // as an overexposed photograph.
         mat.setColor3("slashCore", new Color3(0.88, 0.96, 1.0));
+        // Boldness lives here rather than in the shader's arithmetic, so it is one number
+        // to turn. The sheet is the *body* of the effect — the reference art is mostly
+        // sheet — and at the original scale it was a hint of one.
         // The rim is the same extreme channel ratio the trail uses, and for the same
         // reason: red held near a tenth is the only thing that keeps blue blue after the
         // tonemapper has compressed the top end.
@@ -183,6 +187,11 @@ export class SlashArc {
             const moved = this._hasPrev ? Vector3.Distance(_out, _prev) : Infinity;
             if (moved >= STEP_GATE) {
                 this._push(_in, _out);
+                // The direction of travel, captured *before* `_prev` is advanced. Reading
+                // it afterwards gives the difference between a vector and itself — zero —
+                // so every grain left the blade with no directional velocity at all. The
+                // same aliasing that had the swept blade testing a zero-length segment.
+                _travel.copyFrom(_out).subtractInPlace(_prev);
                 _prev.copyFrom(_out);
                 this._hasPrev = true;
                 this._throwSnow(dt, moved);
@@ -265,11 +274,10 @@ export class SlashArc {
         this._grainDebt -= n;
         if (n > 12) n = 12;
 
-        // Direction of travel, and the blade axis, so the grains leave the rim rather
-        // than the middle of the sheet.
-        const tx = _out.x - _prev.x;
-        const ty = _out.y - _prev.y;
-        const tz = _out.z - _prev.z;
+        // Direction of travel, captured before `_prev` moved — see `update`.
+        const tx = _travel.x;
+        const ty = _travel.y;
+        const tz = _travel.z;
         const tl = Math.hypot(tx, ty, tz) || 1;
         const speed = moved / Math.max(dt, 1e-4);
 
