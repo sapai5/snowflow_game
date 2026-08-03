@@ -563,7 +563,10 @@
     #feed {
         position: fixed;
         left: 18px;
-        bottom: 96px;
+        /* Clear of the HUD, which stands about 92 px tall from its 24 px offset. This was
+           96, which is four pixels of margin — enough to look fine and not enough to
+           survive the health bar gaining a row. */
+        bottom: 112px;
         z-index: 34;
         display: flex;
         flex-direction: column-reverse;
@@ -603,12 +606,16 @@
     }
     #net-status.show { opacity: 0.85; }
 
+    /* Top left, which is the only corner nothing else claims: the HUD and the kill feed
+       are bottom left, the hint is bottom centre, and the settings overlay is a full-height
+       panel down the right. This used to sit at bottom left, directly underneath the HUD —
+       the HUD is about 92 px tall from a 24 px offset and the link was at 18. */
     #share-link {
         position: fixed;
         left: 18px;
-        bottom: 18px;
+        top: 14px;
         z-index: 34;
-        max-width: 46vw;
+        max-width: 44vw;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -623,12 +630,22 @@
         opacity: 0;
         transition: opacity 180ms ease, color 180ms ease, border-color 180ms ease;
     }
+    /* Labelled, because a bare URL in a corner does not say what it is for. */
+    #share-link::before {
+        content: "invite ";
+        color: rgba(150, 185, 220, 0.65);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-size: 9px;
+    }
+
     #share-link.show { opacity: 0.7; }
     #share-link:hover { opacity: 1; color: var(--frost); }
     #share-link.copied {
         color: #bfe6ff;
         border-color: rgba(150, 220, 255, 0.5);
     }
+    #share-link.copied::before { content: "copied "; }
 
     #score {
         position: fixed;
