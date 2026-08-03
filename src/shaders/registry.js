@@ -70,6 +70,8 @@ import crystalPrepassVert from "./crystalPrepass.vertex.wgsl?raw";
 import swordPrepassVert from "./swordPrepass.vertex.wgsl?raw";
 import trailVert from "./trail.vertex.wgsl?raw";
 import trailFrag from "./trail.fragment.wgsl?raw";
+import slashVert from "./slash.vertex.wgsl?raw";
+import slashFrag from "./slash.fragment.wgsl?raw";
 
 
 const INCLUDES = {
@@ -141,6 +143,8 @@ const SHADERS = {
 
     trailVertexShader: trailVert,
     trailPixelShader: trailFrag,
+    slashVertexShader: slashVert,
+    slashPixelShader: slashFrag,
 };
 
 let registered = false;

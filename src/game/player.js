@@ -24,6 +24,7 @@ import { Character } from "../character/character.js";
 import { IceSword } from "../character/sword.js";
 import { SwordCombat } from "../character/swordCombat.js";
 import { SwordTrail } from "../vfx/swordTrail.js";
+import { SlashArc } from "../vfx/slashArc.js";
 import { SnowContact } from "../character/snowContact.js";
 import { IDLE_INTENT, makeIntent } from "./intent.js";
 import { MAX_HEALTH } from "./rules.js";
@@ -56,6 +57,10 @@ export class Player {
         this.combat = new SwordCombat(this.controller);
         // A seed per player, so four trails do not carry identical gold banding.
         this.trail = new SwordTrail(deps.scene, Math.random() * 6.283);
+        // The sheet. Takes the spray pool because the arc throws powder off its outer
+        // rim — the one part of that effect which is not stylisation, since the point is
+        // moving through a snowfield at ten metres a second.
+        this.slash = new SlashArc(deps.scene, deps.spray);
         // One contact per player rather than one shared: it carries per-character
         // state — the last blade tip, the distance since the last scuff — and
         // sharing it would have four characters overwriting each other's history.
@@ -220,7 +225,11 @@ export class Player {
         // Only a live strike leaves light. Carrying the thing around does not, and the
         // wind-up does not either — the blade is travelling backward slowly and a
         // ribbon there reads as the sword leaking rather than as a swing.
-        this.trail.update(dt, this.sword, this.combat.stage > 0 && this._bladeLive());
+        const bladeLive = this.combat.stage > 0 && this._bladeLive();
+        this.trail.update(dt, this.sword, bladeLive);
+        // The broad sheet, from the same window. Two effects rather than one: the contrail
+        // says where the edge went, the sheet says how much the swing covered.
+        this.slash.update(dt, this.sword, bladeLive);
         this.contact.update(dt);
     }
 
@@ -281,7 +290,9 @@ export class Player {
     }
 
     get triangles() {
-        return this.figure.triangles + (this.sword.mesh.isVisible ? this.sword.triangles : 0);
+        return this.figure.triangles
+            + (this.sword.mesh.isVisible ? this.sword.triangles : 0)
+            + this.slash.triangles;
     }
 
     setVisible(v) {
@@ -291,6 +302,7 @@ export class Player {
 
     dispose() {
         this.trail.dispose();
+        this.slash.dispose();
         this.sword.dispose();
         this.figure.dispose();
     }

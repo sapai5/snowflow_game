@@ -116,6 +116,8 @@ export const S = {
     swordGlow: 1.4,
     /** Brightness of the ice-and-gold contrail behind a swing. 0 turns it off. */
     swordTrail: 1.0,
+    /** The broad slash sheet. A separate effect from the contrail; both can run. */
+    slashArc: 1.0,
     showWake: true,
 
     /** Sound on, and how loud. Synthesised at load; see `audio/audio.js`. */
@@ -224,6 +226,7 @@ export const SCHEMA = [
             { k: "showSword", l: "Ice sword", t: "b" },
             { k: "swordGlow", l: "Blade glow", t: "f", min: 0, max: 3, step: 0.01 },
             { k: "swordTrail", l: "Swing trail", t: "f", min: 0, max: 3, step: 0.01 },
+            { k: "slashArc", l: "Slash arc", t: "f", min: 0, max: 3, step: 0.01 },
             { k: "sound", l: "Sound", t: "b" },
             { k: "volume", l: "Volume", t: "f", min: 0, max: 1, step: 0.01 },
             { k: "wireframe", l: "Wireframe", t: "b" },
