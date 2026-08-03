@@ -32,6 +32,7 @@ import { SLOW, BLIND, AIR_RESTRICT, STAGGER, DOT } from "./effects.js";
 import {
     SWORD_DAMAGE, SWORD_KNOCKBACK, BLADE_RADIUS, BODY_RADIUS, BODY_HEIGHT,
     CLASH_STAGGER, SPELLS, SPELL_COOLDOWN, MAX_HEALTH, RESPAWN_TIME,
+    FINISHER_STAGGER,
 } from "./rules.js";
 
 // Re-exported because callers have always imported them from here, and the spell
@@ -221,6 +222,15 @@ export class CombatResolver {
                         target, SWORD_DAMAGE[stage] || 9, attacker.id,
                         SWORD_KNOCKBACK[stage] || 3, attacker.controller.position
                     );
+
+                    // The finisher, and only the finisher, staggers. A stroke that takes a
+                    // second and a half of committed animation to throw should end the
+                    // exchange when it lands rather than being traded against — and the
+                    // stagger is what stops the victim simply swinging back through the
+                    // metre and a half the shove bought.
+                    if (stage >= 3) {
+                        target.effects.apply(STAGGER, 1, FINISHER_STAGGER, attacker.id);
+                    }
 
                     // Hit-stop on *contact*, which is not the same thing as the
                     // phase-timed one the combo already applies. That one fires on

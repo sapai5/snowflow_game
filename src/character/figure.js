@@ -125,6 +125,15 @@ const TOE_OFF = 0.46;
 const SWING_REACH = 0.42;
 const SWING_EXTEND = 0.10;
 
+/**
+ * How far down the handle the off hand takes hold, metres.
+ *
+ * A hand's width below the sword hand. Both hands at the same point is a clasp rather
+ * than a grip, and the grip is only 21 cm long in total — see `GUARD_TOP` in `sword.js` —
+ * so there is not much room to be wrong in either direction.
+ */
+const GRIP_DROP = 0.115;
+
 /** Scratch for `swingDirection` and its two de Casteljau intermediates. */
 const _sd = new Float32Array(3);
 const _c0 = new Float32Array(3);
@@ -246,7 +255,15 @@ const SWING_ARCS = [
         // The via sits forward and low of the direct path, which brings the blade down in
         // *front* of the body rather than through it — the spherical interpolation between
         // two nearly antipodal directions is otherwise free to take either side.
-        hand: { fromYaw: 20, fromElev: 76, toYaw: -4, toElev: -44, viaYaw: 6, viaElev: 26 },
+        //
+        // The coil sits at 64 degrees rather than the 76 it started at. Overhead is where
+        // a heavy cut loads, but a hand directly above the head is a *hold* — the blade has
+        // to come back down through the same space it went up through, and the top of the
+        // arc reads as a pause. Two hands on the grip also physically cannot go that high
+        // without the off shoulder following, and the off shoulder is attached to a trunk
+        // that is doing something else. Sixty-four degrees still clears the head and leaves
+        // the descent room to accelerate.
+        hand: { fromYaw: 20, fromElev: 64, toYaw: -4, toElev: -44, viaYaw: 6, viaElev: 26 },
     },
     {
         // 3 — the Return Slash. The mirror of the jab: coiled low across the body where
@@ -751,6 +768,9 @@ export class Figure {
         this._armPos = new Float32Array(6);
         this._armVel = new Float32Array(6);
         this._armLive = [false, false];
+        /** Where the off hand takes hold during a two-handed stroke. */
+        this._grip = new Float32Array(3);
+        this._gripValid = false;
 
         this._t = 0;
         this._prevGait = 0;
@@ -1381,7 +1401,15 @@ export class Figure {
         // Slow idle drift so a standing figure is never perfectly still.
         const idle = Math.sin(this._t * 0.9) * 0.02 + Math.sin(this._t * 1.7 + 1.3) * 0.012;
 
-        for (let a = 0; a < 2; a++) {
+        // The sword arm is solved *first*, off arm second.
+        //
+        // Reversed from the obvious order because a two-handed grip needs the off hand to
+        // reach the sword's handle, and the handle is wherever the sword hand ended up.
+        // The alternative is using last frame's position, which at the speed a finisher
+        // travels would leave a visible gap between the hands on exactly the stroke this
+        // exists for.
+        for (let ai = 0; ai < 2; ai++) {
+            const a = 1 - ai;
             const sgn = a === 0 ? -1 : 1;
             const upperB = a === 0 ? B_UPPER_L : B_UPPER_R;
             const foreB = a === 0 ? B_FORE_L : B_FORE_R;
@@ -1528,6 +1556,22 @@ export class Figure {
                 tz += (gz2 - tz) * swingW;
             }
 
+            // ---- both hands on the grip --------------------------------------
+            //
+            // The off hand goes to the handle, below the sword hand, for as long as
+            // `swingGrip` says so. It is set from the *sword* arm's solved wrist, which is
+            // why this loop runs in reverse.
+            //
+            // Blended rather than snapped, and blended toward a point on the handle rather
+            // than at the sword hand itself: two hands occupying one point is what a
+            // clasp looks like, and a hand's width apart is what a grip looks like.
+            if (a === 0 && ch.swingGrip > 0.002 && this._gripValid) {
+                const g = ch.swingGrip;
+                tx += (this._grip[0] - tx) * g;
+                ty += (this._grip[1] - ty) * g;
+                tz += (this._grip[2] - tz) * g;
+            }
+
             // ---- give the hand mass ------------------------------------------
             //
             // Everything above decided where the hand *should* be. This spring is
@@ -1614,6 +1658,18 @@ export class Figure {
                 vert = vert * (1 - high) - high * 0.55;
                 fwd += high * 0.25;
 
+                // The off arm, while it is holding on. Its elbow tucks in toward the body
+                // and drops, because an arm reaching across to a handle it is not leading
+                // has nowhere else to put it — and because an off elbow winging outward is
+                // the single clearest tell that two hands are on a sword by accident
+                // rather than on purpose.
+                if (a === 0 && ch.swingGrip > 0.002) {
+                    const g = ch.swingGrip;
+                    lat += (sgn * 0.55 - lat) * g;
+                    vert += (-0.75 - vert) * g;
+                    fwd += (0.20 - fwd) * g;
+                }
+
                 const ex = rX * lat + uX * vert + fX * fwd;
                 const ey = rY * lat + uY * vert + fY * fwd;
                 const ez = rZ * lat + uZ * vert + fZ * fwd;
@@ -1638,6 +1694,19 @@ export class Figure {
                 wx - _p[0], wy - _p[1], wz - _p[2],
                 fX, fY, fZ
             );
+            // Where the off hand should take hold, if this stroke is two-handed: a
+            // hand's width down the handle from the sword hand, along the forearm's own
+            // axis — which is the grip's axis, because the hand continues the forearm and
+            // the sword continues the hand.
+            if (a === 1) {
+                const gx = wx - _p[0], gy = wy - _p[1], gz = wz - _p[2];
+                const gl = Math.hypot(gx, gy, gz) || 1;
+                this._grip[0] = wx - (gx / gl) * GRIP_DROP;
+                this._grip[1] = wy - (gy / gl) * GRIP_DROP;
+                this._grip[2] = wz - (gz / gl) * GRIP_DROP;
+                this._gripValid = true;
+            }
+
             // The hand continues the forearm, rolled palm-inward.
             let hx = wx - _p[0], hy = wy - _p[1], hz = wz - _p[2];
             const hl = Math.hypot(hx, hy, hz) || 1;

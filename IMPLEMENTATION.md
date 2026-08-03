@@ -150,12 +150,23 @@ insurance:
 
 Proposals, given the field is 620 m in radius (§7.1):
 
-| | Now | Proposed | Reasoning |
-|---|---|---|---|
-| Walk | 2.5 | **2.3** | Barely changed; it is already a walk |
-| Sprint | 5.4 | **4.4** | −19 %. Legible at a fight's distance, still clearly a run |
-| Surf top speed | 19.5 | **13.0** | −33 %. Still 3× sprint, so it stays the traversal tool |
-| Surf thrust | 11.0 | **8.5** | Keeps the same feel of building speed, at the lower ceiling |
+| | Original | First pass | **Now** | Reasoning |
+|---|---|---|---|---|
+| Walk | 2.5 | 2.3 | **1.9** | |
+| Sprint | 5.4 | 4.4 | **3.6** | Legible at a fight's distance, still clearly a run |
+| Ground accel | 26 | 12 | **8** | Where the weight actually comes from — a sidestep that starts instantly is free; one that takes a fifth of a second is a decision |
+| Turn rate | 11 | 11 | **8** | A character that pivots instantly can answer an attack from any direction at no cost |
+| Surf top speed | 19.5 | **13.0** | 13.0 | Still 3× sprint, so it stays the traversal tool |
+| Surf thrust | 11.0 | **8.5** | 8.5 | Same feel of building speed, at the lower ceiling |
+
+The second pass was for melee feel, and the arithmetic is worth recording because the
+intuition is wrong: **slowing movement and lengthening wind-ups largely cancel.** The
+finisher's wind-up went 0.38 → 0.50 s while the run went 4.4 → 3.6, so the ground an
+opponent covers while it loads barely moved — 1.7 m to 1.8 m. Against a reach of 1.48 m
+that is the number that matters, and it is why movement is only slowed a little: further
+would not make fights more readable, it would make crossing a 240 m field take a minute.
+
+What actually made the fighting deliberate was the phase split (§5.1a), not the speeds.
 
 Surf stays available in combat. It cannot attack while surfing (already true in the
 code), so it reads as a commitment: fast, and unarmed while you do it.
@@ -164,13 +175,26 @@ code), so it reads as a commitment: fast, and unarmed while you do it.
 
 ## 5. Combat
 
+### 5.1a Attack phases — where "deliberate" comes from
+
+Each phase does a different job, and the temptation is always to slow the wrong one:
+
+| Phase | Job | Light | Heavy |
+|---|---|---|---|
+| Wind-up | **readability** — the only window an opponent can answer | 0.20 s | **0.50 s** |
+| Strike | the hit, and the parry window. Stays fast: a slow strike reads as underwater, not restrained | 0.28 s | 0.44 s |
+| Recovery | **commitment** — the price of having missed | 0.24 s | **0.42 s** |
+
+The full string runs 2.89 s where it originally ran 1.84 s, and almost none of that is the
+blade moving more slowly. Peak hand travel is 13–18°/frame at 30 fps, down from 35–42.
+
 ### 5.1 Core
 
 | | Value |
 |---|---|
 | Health | 100 |
 | Sword light (hits 1, 2) | **9** |
-| Sword heavy (hit 3) | **15** |
+| Sword heavy (hit 3) | **15**, two-handed, 11 m/s shove, 0.35 s stagger |
 | Full 3-hit string | 33 — three clean strings is a kill, ~10 hits mixed |
 | Blade hurtbox | segment guard → tip, r 0.12 m (`bladePoint()` already gives this) |
 | Player hurtbox | capsule, r 0.35 m, 1.75 m tall |

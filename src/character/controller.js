@@ -33,23 +33,51 @@ const _right = new Vector3();
 const _tmp = new Vector3();
 const _n = new Vector3();
 
-const WALK_SPEED = 2.3;
+/*
+ * Ground speeds, slowed a second time for the fight.
+ *
+ * What makes a deliberate melee legible is not slowness but the *ratio* between how long
+ * an attack takes and how far an opponent can move in that time, and it is worth writing
+ * the arithmetic down because the intuition is misleading: lengthening the wind-ups and
+ * slowing the movement largely cancel. The finisher's wind-up went from 0.38 s to 0.50 s
+ * while the run went from 4.4 to 3.6, so the ground an opponent covers while it loads
+ * barely changed — 1.7 m to 1.8 m.
+ *
+ * That number is the one that matters, and it is the reason these are only slowed a
+ * little. Reach is about 1.48 m from body centre to blade tip, so 1.8 m of travel during a
+ * wind-up means a heavy attack can be walked out of if it is seen coming and cannot be if
+ * it is not. Slowing movement much further would not make fights more readable; it would
+ * make crossing a 240 m field take a minute.
+ */
+const WALK_SPEED = 1.9;
 /**
- * Sprint. Slowed from 5.4 for combat: at a fighting distance the old speed made
+ * Sprint. Slowed from 5.4, then from 4.4: at a fighting distance the old speeds made
  * spacing hard to read, and a sprint that outruns a swing makes the swing pointless.
  */
-const RUN_SPEED = 4.4;
+const RUN_SPEED = 3.6;
 /**
  * Ground acceleration, m/s^2.
  *
- * 26 was effectively instant — top speed in a fifth of a second — and a
- * character that reaches full pace inside two frames has no start to animate.
- * Twelve gives about half a second from standing to a run, which is roughly what
- * a person does and, more to the point, is long enough that the gait ramps up
- * with the speed instead of snapping straight to a sprint cadence.
+ * 26 was effectively instant — top speed in a fifth of a second — and a character that
+ * reaches full pace inside two frames has no start to animate. Eight gives just under half
+ * a second from standing to a run.
+ *
+ * The lower it goes the more the character reads as having mass, and it is also what makes
+ * a fight's footwork *cost* something: a sidestep that begins instantly is free, and one
+ * that takes a fifth of a second to build is a decision. That is most of the difference
+ * between a twitch fight and a deliberate one, and it is worth more here than any amount
+ * of top-speed reduction.
  */
-const WALK_ACCEL = 12;
-const WALK_DECEL = 17;
+const WALK_ACCEL = 8;
+const WALK_DECEL = 12;
+/**
+ * How fast the body comes round to a new heading, as a damping rate.
+ *
+ * Slowed from 11. Turning is the other half of footwork having weight — a character that
+ * pivots instantly can answer an attack from any direction with no commitment at all,
+ * which removes the reason to face anybody in particular.
+ */
+const TURN_RATE = 8;
 
 /**
  * Surf ceiling, slowed from 19.5. Still three times a sprint, so it remains *the*
@@ -315,6 +343,14 @@ export class CharacterController {
         this.swingSet = 0;
         /** How much hip/torso separation the current attack removes, 0..1. */
         this.swingSnap = 0;
+        /**
+         * How much of both hands is on the grip, 0..1.
+         *
+         * Only the finisher asks for it. Written by the combo and read by the figure,
+         * which brings the off hand across to the handle instead of letting it keep its
+         * locomotion swing.
+         */
+        this.swingGrip = 0;
         /**
          * Phase shift the figure's lag springs must apply this frame, then clear.
          * Written when a chained attack rebases the arc into its own plane, so the
@@ -824,10 +860,10 @@ export class CharacterController {
             const want = input.faceYaw === null || input.faceYaw === undefined
                 ? Math.atan2(_wish.x, _wish.z)
                 : input.faceYaw;
-            this.facing = angleDamp(this.facing, want, 11, h);
+            this.facing = angleDamp(this.facing, want, TURN_RATE, h);
         } else {
             if (input.faceYaw !== null && input.faceYaw !== undefined) {
-                this.facing = angleDamp(this.facing, input.faceYaw, 11, h);
+                this.facing = angleDamp(this.facing, input.faceYaw, TURN_RATE, h);
             }
             const d = WALK_DECEL * h;
             const s = Math.hypot(this.velocity.x, this.velocity.z);

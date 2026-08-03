@@ -102,7 +102,7 @@ const STAGES = [
         //
         // 0.28 s with the shorter arc holds the peak under 18 degrees a frame at 30 fps
         // and under 9 at 60.
-        windup: 0.15, strike: 0.28, recover: 0.17,
+        windup: 0.20, strike: 0.28, recover: 0.24,
         drive: 1.7, plane: 1, snap: 0.65, set: 0.45, stomp: 0.3, trauma: 0.10,
         // Overshoot past the target line, in units of half the sweep. The jab's
         // arc is 101 degrees, so 0.70 half-sweeps is ~35 degrees of blade travel
@@ -115,7 +115,7 @@ const STAGES = [
         // The return stroke. Chained, most of this wind-up never plays — the
         // rebase puts the blade at the coil already and the body just re-orients.
         // A touch wider and heavier than the first: the string is escalating.
-        windup: 0.17, strike: 0.32, recover: 0.18,
+        windup: 0.23, strike: 0.32, recover: 0.26,
         drive: 2.2, plane: 3, snap: 0.50, set: 0.55, stomp: 0.45, trauma: 0.13,
         followThrough: 0.62,
         hitstop: 0.05,
@@ -130,8 +130,15 @@ const STAGES = [
         // The recovery is shorter than the wind-up on purpose. A long recovery on a
         // small overshoot gives the follow-through a slow apex, which is a stop by
         // another name; a brisk one carries the blade over the top and back.
-        windup: 0.38, strike: 0.44, recover: 0.30,
-        drive: 8.5, plane: 2, snap: 0.0, set: 1.0, stomp: 1.0, trauma: 0.30,
+        windup: 0.50, strike: 0.44, recover: 0.42,
+        drive: 8.5, plane: 2, snap: 0.0, set: 1.0, stomp: 1.0, trauma: 0.34,
+        // Both hands on the grip. The off hand comes across during the wind-up, holds
+        // through the cut, and is released into the recovery — see `swingGrip`.
+        twoHand: 1,
+        // A shove rather than a nudge. See `SWORD_KNOCKBACK` in `rules.js`: the finisher
+        // is the one strike in the string that moves somebody, which is what makes
+        // landing it worth the second and a half it costs to throw.
+        shove: 1,
         // ~31 degrees past the end of the descending arc, in the same half-sweep units.
         // The cut is vertical now and it ends below the belt, so the overshoot carries the
         // hand down and slightly across rather than around the side — a right hand that has
@@ -171,6 +178,24 @@ const CHAIN_WINDOW = 0.50;
  * frames the strike lasts, and the two together were what made the fast attacks look like
  * they skipped. Lengthening the strike and flattening the peak share the work; either
  * alone would have had to be taken too far.
+ */
+/*
+ * The phase lengths above carry most of what makes a fight feel deliberate rather than
+ * twitchy, and it is worth naming which part does what, because the temptation is always
+ * to slow the strike:
+ *
+ *   the wind-up is *readability*. It is the only window in which an opponent can see what
+ *     is coming and answer it, so a heavy attack needs half a second of it and a light one
+ *     needs a fifth. Lengthening this makes a fight legible.
+ *   the strike is *the hit*. It should stay fast, because a slow strike does not read as
+ *     restrained, it reads as underwater. It is also the parry window, so it is the one
+ *     phase where length is a mechanical decision rather than an aesthetic one.
+ *   the recovery is *commitment*. It is the price of having swung and missed, and it is
+ *     what stops a fight being two people mashing. Lengthening this makes a fight tense.
+ *
+ * So the wind-ups and recoveries were lengthened and the strikes were left alone. The
+ * string runs 2.89 s where it used to run 1.84 s, and almost none of that is the blade
+ * moving more slowly.
  */
 const STRIKE_POWER = 1.45;
 const STRIKE_FLOOR = 0.34;
@@ -482,6 +507,7 @@ export class SwordCombat {
         let set = 0;
         let shift = 0;
         let snap = 0;
+        let gripWant = 0;
 
         if (this.stage > 0) {
             const s = STAGES[this.stage - 1];
@@ -495,6 +521,10 @@ export class SwordCombat {
 
             if (t < tStrike) {
                 const u = t / s.windup;
+                // The off hand joins during the coil and is gone by the end of the
+                // recovery, so the two-handed grip is part of the anticipation rather
+                // than something that appears at the moment of contact.
+                gripWant = s.twoHand ? 1 : 0;
                 // Accelerating into the coil — see `WINDUP_POWER`. It leaves guard
                 // gently and arrives at the coil already travelling, so the reversal
                 // into the strike is an instant rather than a rest. From guard that
@@ -506,6 +536,7 @@ export class SwordCombat {
                 shift = -easeOutCubic(u);
             } else if (t < tRecover) {
                 const u = (t - tStrike) / s.strike;
+                gripWant = s.twoHand ? 1 : 0;
                 // The uncoil and the overshoot in one curve: leaves the coil already
                 // moving, fastest around two thirds, through the target line at the
                 // far shoulder of the peak, and *still travelling* as it passes into
@@ -557,6 +588,17 @@ export class SwordCombat {
         // would flatten the acceleration that is the whole point of it.
         ch.swingArc = expDamp(ch.swingArc, arc, 60, h);
         ch.swingSet = expDamp(ch.swingSet, set * on, 18, h);
+
+        // Two hands on the grip, for the strokes that ask for it.
+        //
+        // Rises through the wind-up, holds flat across the strike, and releases through
+        // the recovery. Asymmetric rates on purpose: bringing the off hand across is a
+        // deliberate act and part of the anticipation, so it is unhurried; letting go is
+        // a consequence of the follow-through pulling the arms apart, so it is quick.
+        ch.swingGrip = expDamp(
+            ch.swingGrip, gripWant * on,
+            gripWant > ch.swingGrip ? 7 : 14, h
+        );
         ch.swingShift = expDamp(ch.swingShift, shift * on, 22, h);
         ch.swingSnap = expDamp(ch.swingSnap, snap, 20, h);
         if (ch.swingBlend < 0.002 && this.stage === 0) {

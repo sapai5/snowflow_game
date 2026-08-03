@@ -33,8 +33,31 @@ export const BODY_HEIGHT = 1.75;
 
 /** Index is the combo stage, 1-based; stage 3 is the finisher. */
 export const SWORD_DAMAGE = [0, 9, 9, 15];
-/** How far a hit shoves the victim, m/s, per stage. */
-export const SWORD_KNOCKBACK = [0, 2.5, 3.0, 6.0];
+/**
+ * How far a hit shoves the victim, m/s, per stage.
+ *
+ * The two light strokes barely move anyone — 2.5 m/s decays to about a quarter of a metre
+ * of travel, which is a flinch rather than a push, and that is right: a fast attack that
+ * relocated its target would make the string impossible to continue.
+ *
+ * The finisher is the one strike that moves somebody. It is two-handed, it costs a second
+ * and a half to throw, and it is the only reason to commit to the whole string rather than
+ * cancelling out after two — so landing it has to *do* something beyond fifteen damage.
+ * At 11 m/s the victim travels about a metre and a half, which is out of the attacker's
+ * own reach: the shove ends the exchange and both sides have to close again.
+ */
+export const SWORD_KNOCKBACK = [0, 2.5, 3.0, 11.0];
+
+/**
+ * How long the finisher staggers whoever it lands on, seconds.
+ *
+ * Deliberately short. A stagger is a full input lock, and locks are the least forgiving
+ * thing a fight can contain — the earlier decision that a normal hit does *not* stagger
+ * stands, and this is the exception rather than a change of mind. A third of a second is
+ * long enough that a landed finisher cannot be traded against, and short enough that being
+ * on the receiving end is a setback rather than a spectator seat.
+ */
+export const FINISHER_STAGGER = 0.35;
 /** Radius of the blade as a hurtbox. Generous: the mesh is a jagged shard. */
 export const BLADE_RADIUS = 0.12;
 /** A parried attacker is locked out for this long. */

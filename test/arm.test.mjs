@@ -213,3 +213,105 @@ export async function run() {
 
     return result();
 }
+
+/**
+ * The finisher, as a heavy attack.
+ *
+ * A heavy attack is a contract: it costs commitment and it pays consequence. Both halves
+ * are asserted here because either alone is a worse attack than the light strokes it is
+ * supposed to escalate from — a slow strike with no payoff is a mistake, and a fast one
+ * with a big payoff is the only move anyone would ever use.
+ */
+export async function runHeavy() {
+    const { ok, result } = suite();
+
+    const combat = readFileSync(new URL("../src/character/swordCombat.js", import.meta.url), "utf8");
+    const rules = readFileSync(new URL("../src/game/rules.js", import.meta.url), "utf8");
+    const figure = SRC;
+
+    const stages = [...combat.matchAll(/windup:\s*([0-9.]+),\s*strike:\s*([0-9.]+),\s*recover:\s*([0-9.]+)/g)]
+        .map((m) => ({ windup: +m[1], strike: +m[2], recover: +m[3] }));
+    ok(stages.length === 3, "three stages, got " + stages.length);
+
+    const total = (s) => s.windup + s.strike + s.recover;
+    const heavy = stages[2];
+
+    // ---- commitment --------------------------------------------------------
+    {
+        ok(total(heavy) > total(stages[0]) * 1.8,
+            "the finisher costs far longer than a light stroke: " +
+            total(heavy).toFixed(2) + " s against " + total(stages[0]).toFixed(2));
+        ok(heavy.windup >= 0.45,
+            "with a wind-up long enough to be seen and answered, " + heavy.windup + " s");
+        ok(heavy.recover >= 0.35,
+            "and a recovery long enough that missing costs something, " + heavy.recover + " s");
+        // The strike itself must stay quick. A slow strike does not read as restrained,
+        // it reads as underwater — and it is also the parry window.
+        ok(heavy.strike < heavy.windup,
+            "while the strike stays shorter than the wind-up that loads it");
+    }
+
+    // ---- readability, which is a ratio and not a speed --------------------
+    {
+        const controller = readFileSync(new URL("../src/character/controller.js", import.meta.url), "utf8");
+        const run = parseFloat(controller.match(/const RUN_SPEED = ([0-9.]+)/)[1]);
+        const covered = heavy.windup * run;
+        // Reach is about 1.48 m: blade tip from body centre, accounting for carry tilt.
+        ok(covered > 1.6,
+            "an opponent can cover more than a reach's worth of ground while the " +
+            "finisher loads, so it can be walked out of: " + covered.toFixed(1) + " m");
+        ok(covered < 4,
+            "but not so much that it could never land: " + covered.toFixed(1) + " m");
+    }
+
+    // ---- consequence ------------------------------------------------------
+    {
+        const kb = rules.match(/SWORD_KNOCKBACK = \[([^\]]*)\]/)[1].split(",").map(Number);
+        ok(kb[3] > kb[1] * 3,
+            "the finisher shoves far harder than a light hit: " + kb[3] + " against " + kb[1]);
+        ok(kb[3] >= 9,
+            "hard enough to push the victim out of the attacker's own reach, " + kb[3] + " m/s");
+        ok(/FINISHER_STAGGER/.test(rules), "and it staggers");
+        const st = parseFloat(rules.match(/FINISHER_STAGGER = ([0-9.]+)/)[1]);
+        ok(st > 0.2 && st < 0.6,
+            "briefly — a stagger is a full input lock and it must not be a spectator " +
+            "seat: " + st + " s");
+        ok(/stage >= 3/.test(readFileSync(new URL("../src/game/combat.js", import.meta.url), "utf8")),
+            "and only the finisher does, so the earlier decision that a normal hit does " +
+            "not stagger still stands");
+    }
+
+    // ---- two hands ---------------------------------------------------------
+    {
+        ok(/twoHand: 1/.test(combat), "the finisher is flagged two-handed");
+        const flags = [...combat.matchAll(/twoHand:/g)];
+        ok(flags.length === 1,
+            "and it is the only one — a light stroke that needed both hands would not be " +
+            "a light stroke");
+        ok(/ch\.swingGrip = expDamp/.test(combat), "the grip is a blend, not a switch");
+        ok(/gripWant > ch\.swingGrip \? 7 : 14/.test(combat),
+            "and it takes hold more slowly than it lets go: reaching across is part of " +
+            "the anticipation, releasing is the follow-through pulling the arms apart");
+
+        ok(/const a = 1 - ai/.test(figure),
+            "the sword arm is solved first, so the off hand has a handle to reach for");
+        ok(/GRIP_DROP/.test(figure), "the off hand takes hold below the sword hand");
+        const drop = parseFloat(figure.match(/const GRIP_DROP = ([0-9.]+)/)[1]);
+        ok(drop > 0.05 && drop < 0.21,
+            "by about a hand's width, and inside the 21 cm the grip actually is: " + drop);
+        ok(/a === 0 && ch\.swingGrip > 0\.002/.test(figure),
+            "only the off arm is redirected");
+    }
+
+    // ---- the coil is not so high that the top of the arc is a hold -------
+    {
+        const fin = [...figure.matchAll(/hand:\s*\{([^}]*)\}/g)][1][1];
+        const elev = parseFloat(fin.match(/fromElev:\s*(-?[0-9.]+)/)[1]);
+        ok(elev < 70,
+            "the finisher's coil clears the head without going straight above it, where " +
+            "the blade has to come back down through the space it went up through: " + elev);
+        ok(elev > 45, "but is still overhead rather than a shoulder-height swipe: " + elev);
+    }
+
+    return result();
+}
