@@ -105,6 +105,11 @@ export const SPELLS = [
     {
         id: 3, name: "Updraft", kind: "sphere",
         radius: 4, life: 0.4, damage: 8, launch: 7, parryable: true, once: true,
+        // A column, not a ball. It is the anti-air as well as the mobility tool, so it has
+        // to reach somebody already off the ground — a sphere of radius 4 centred at the
+        // aim point stops catching anyone about four metres up, which is exactly the
+        // height the previous cast of it threw them to.
+        column: 6,
         // Anyone caught in it goes up, the caster included. Standing in your own
         // updraft is a mobility tool with a cost rather than a mistake.
         selfHit: true,
@@ -113,6 +118,12 @@ export const SPELLS = [
     {
         id: 4, name: "Crystal field", kind: "field",
         radius: 3, life: 5.0, damage: 20, knockback: 1.5, parryable: true, once: true,
+        // Waist-high, and the number matters. As a sphere on the ground its horizontal
+        // reach shrank with the height of whoever was standing in it: full 3 m for someone
+        // on the flat, 1.7 m for someone on a rise two metres up, nothing at all at three.
+        // A field is an area you stand in, so it is a cylinder — and a low one, so being
+        // thrown into the air by an updraft genuinely gets you out of it.
+        column: 2.2,
         // The impact is parryable and the field is not: you can turn away the eruption,
         // but once ice is standing in the snow it does not care about your sword.
         effect: { type: DOT, magnitude: 6, seconds: 0.6 },
@@ -120,6 +131,10 @@ export const SPELLS = [
     {
         id: 5, name: "Vortex", kind: "burst",
         radius: 3.5, life: 0.6, damage: 0, knockback: 10, parryable: false, once: true,
+        // A horizontal shove, so it reaches up about as far as a person and no further.
+        // Pushing somebody who is three metres overhead sideways is not what the spell
+        // looks like it does.
+        column: 2.6,
         deflects: true,
     },
 ];

@@ -71,6 +71,14 @@ class Volume {
          * specced at six.
          */
         this.impacted = new Set();
+        /**
+         * Where this volume was last frame.
+         *
+         * Only a projectile uses it, and it is the difference between a snowball that can
+         * hit somebody and one that can pass through them: at 22 m/s it covers 0.73 m in a
+         * frame at 30 fps against a 0.6 m target region.
+         */
+        this.prevPos = new Vector3();
     }
 }
 
@@ -357,9 +365,7 @@ export class CombatResolver {
      * quadratic solve for a result nobody could tell apart.
      */
     _segmentHitsBody(seg, target) {
-        const foot = target.controller.position;
-        _a.set(foot.x, foot.y + BODY_RADIUS, foot.z);
-        _b.set(foot.x, foot.y + BODY_HEIGHT - BODY_RADIUS, foot.z);
+        bodyCapsule(target, _a, _b);
         const reach = BODY_RADIUS + BLADE_RADIUS;
         const r2 = reach * reach;
         return (
@@ -455,6 +461,7 @@ export class CombatResolver {
 
         if (spell.kind === "projectile") {
             v.pos.copyFrom(origin);
+            v.prevPos.copyFrom(origin);
             v.vel.copyFrom(aim).scaleInPlace(spell.speed);
         } else if (spell.kind === "burst") {
             // Around the caster, and it follows them for its short life.
@@ -495,6 +502,8 @@ export class CombatResolver {
             const spell = v.spell;
 
             if (spell.kind === "projectile") {
+                // Remembered before the step, so the hit test has a segment to sweep.
+                v.prevPos.copyFrom(v.pos);
                 v.vel.y -= spell.gravity * dt;
                 v.pos.addInPlace(_tmp.copyFrom(v.vel).scaleInPlace(dt));
                 // The ground stops it. A snowball that skips across a snowfield for
@@ -506,6 +515,9 @@ export class CombatResolver {
             } else if (spell.kind === "burst") {
                 const owner = this.world.players.get(v.ownerId);
                 if (owner) v.pos.copyFrom(owner.controller.position);
+                v.prevPos.copyFrom(v.pos);
+            } else {
+                v.prevPos.copyFrom(v.pos);
             }
 
             const caster = this.world.players.get(v.ownerId);
@@ -592,20 +604,75 @@ export class CombatResolver {
         }
     }
 
+    /**
+     * Does a gameplay volume reach a body?
+     *
+     * Every test here is against the *same* capsule the sword uses — feet plus a radius up
+     * to head minus a radius — and that is the point of this rewrite. Spells used to test a
+     * single point at mid-chest, which is a sphere of radius 0.35 floating at 0.875 m, and
+     * it produced exactly the complaints it should have: a snowball aimed at the head
+     * passed through, one aimed at the shins passed through, and a crystal field's reach
+     * shrank as the person standing in it got higher up the hill. Two different bodies for
+     * two different weapons is one body too many.
+     *
+     * The shapes:
+     *
+     *   cone         sampled along the capsule rather than at its centre, so a wave that
+     *                catches the legs catches the player.
+     *   projectile   the *swept* segment from last frame's position to this one, against
+     *                the capsule. A snowball at 22 m/s covers 0.73 m in a frame at 30 fps
+     *                and the target region is 0.6 m across, so a static test could put it
+     *                on both sides of somebody without ever being inside them.
+     *   sphere,      vertical cylinders. A ball is the wrong shape for anything anchored
+     *   field,       to the ground: its horizontal reach falls off with height, so the
+     *   burst        same spell covers less ground against a player on a rise than against
+     *                one on the flat, which is invisible in the code and inexplicable in
+     *                play. Heights come from `column` in the spell table.
+     */
     _volumeHits(v, spell, caster, target) {
-        const p = target.controller.position;
-        _a.set(p.x, p.y + BODY_HEIGHT * 0.5, p.z);
+        bodyCapsule(target, _a, _b);
 
         if (spell.kind === "cone") {
-            _d.copyFrom(_a).subtractInPlace(v.pos);
-            const dist = _d.length();
-            if (dist > spell.range) return false;
-            if (dist < 0.001) return true;
-            _d.scaleInPlace(1 / dist);
-            return Math.acos(Math.max(-1, Math.min(1, Vector3.Dot(_d, v.dir)))) <= spell.halfAngle;
+            // Three samples up the body. A proper cone-capsule intersection is worth
+            // writing when a cone is a weapon that has to be exact; this one is a 70-degree
+            // wave with a six-metre range, where the difference between three samples and
+            // the analytic answer is a few centimetres at the rim.
+            for (let i = 0; i <= 2; i++) {
+                const t = i * 0.5;
+                _d.set(
+                    _a.x + (_b.x - _a.x) * t,
+                    _a.y + (_b.y - _a.y) * t,
+                    _a.z + (_b.z - _a.z) * t
+                );
+                _d.subtractInPlace(v.pos);
+                const dist = _d.length();
+                if (dist > spell.range + BODY_RADIUS) continue;
+                if (dist < 0.001) return true;
+                _d.scaleInPlace(1 / dist);
+                const cos = Math.max(-1, Math.min(1, Vector3.Dot(_d, v.dir)));
+                if (Math.acos(cos) <= spell.halfAngle) return true;
+            }
+            return false;
         }
+
+        if (spell.kind === "projectile") {
+            const reach = (spell.radius || 0.25) + BODY_RADIUS;
+            return segDist2(v.prevPos, v.pos, _a, _b) <= reach * reach;
+        }
+
+        // A cylinder: horizontal distance to the axis, and a vertical overlap.
         const r = (spell.radius || 1) + BODY_RADIUS;
-        return Vector3.DistanceSquared(_a, v.pos) <= r * r;
+        const dx = target.controller.position.x - v.pos.x;
+        const dz = target.controller.position.z - v.pos.z;
+        if (dx * dx + dz * dz > r * r) return false;
+
+        const column = spell.column;
+        if (column === undefined) return true;
+        // The capsule's own extent, not the position: a player is 1.75 m tall and a volume
+        // that only tested their feet would miss anyone standing on a lip.
+        const feet = target.controller.position.y;
+        const head = feet + BODY_HEIGHT;
+        return head >= v.pos.y && feet <= v.pos.y + column;
     }
 
     /**
@@ -768,6 +835,23 @@ export class CombatResolver {
         }
         this.events.push({ kind: "death", on: target.id, by: byId });
     }
+}
+
+/**
+ * The body, as one capsule.
+ *
+ * Shared by the sword and by every spell, which it was not before: melee tested a capsule
+ * and magic tested a point at mid-chest. Two hitboxes for one body is how a snowball comes
+ * to pass through a head.
+ *
+ * @param {import("./player.js").Player} target
+ * @param {Vector3} a out — the lower sphere's centre
+ * @param {Vector3} b out — the upper sphere's centre
+ */
+function bodyCapsule(target, a, b) {
+    const p = target.controller.position;
+    a.set(p.x, p.y + BODY_RADIUS, p.z);
+    b.set(p.x, p.y + BODY_HEIGHT - BODY_RADIUS, p.z);
 }
 
 /**
