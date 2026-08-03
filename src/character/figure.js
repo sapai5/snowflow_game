@@ -487,16 +487,84 @@ function slerpInto(out, p, q, theta, sinT, s) {
  *
  * Writes into `_sd`.
  */
-function swingDirection(plane, s, rX, rY, rZ, uX, uY, uZ, fX, fY, fZ) {
+/**
+ * The sweep in the *body's* frame, before any basis is applied.
+ *
+ * Split out because matching one plane's direction against another's is
+ * basis-independent — the arcs are authored in this frame — so the arc-matching below
+ * needs no character, no chest orientation and no world at all.
+ *
+ * @param {number} plane
+ * @param {number} s 0..1 along the sweep; outside that it extrapolates, which is used
+ * @param {number[]} out
+ * @param {number[]} c0 scratch
+ * @param {number[]} c1 scratch
+ */
+function swingLocal(plane, s, out, c0, c1) {
     const e = SWING_SLERP[plane];
-    if (!e) return;
-
-    slerpInto(_c0, e.a, e.via, e.av.theta, e.av.sin, s);
-    slerpInto(_c1, e.via, e.b, e.vb.theta, e.vb.sin, s);
-    // The final blend's angle is not constant, so it is the one solved per call.
-    const cos = clamp(_c0[0] * _c1[0] + _c0[1] * _c1[1] + _c0[2] * _c1[2], -1, 1);
+    if (!e) return out;
+    slerpInto(c0, e.a, e.via, e.av.theta, e.av.sin, s);
+    slerpInto(c1, e.via, e.b, e.vb.theta, e.vb.sin, s);
+    const cos = clamp(c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2], -1, 1);
     const theta = Math.acos(cos);
-    slerpInto(_sd, _c0, _c1, theta, Math.sin(theta), s);
+    slerpInto(out, c0, c1, theta, Math.sin(theta), s);
+    return out;
+}
+
+const _m0 = [0, 0, 0];
+const _m1 = [0, 0, 0];
+const _mc0 = [0, 0, 0];
+const _mc1 = [0, 0, 0];
+
+/**
+ * The sweep, in world space, with the chain bridge applied.
+ *
+ * `bridge` is how much of a chained wind-up is left to travel, 1 at its first frame and 0
+ * at its last. While it is non-zero the direction is interpolated *between planes*: from
+ * where the previous stroke actually left the blade, to where this stroke's coil is.
+ *
+ * This is the fix for the blade stopping mid-combo, and it took two wrong answers to get
+ * to. The rebase assumed a stroke's follow-through and the next stroke's coil were the same
+ * world direction — the arcs are authored end-to-start, so it is nearly true for the jab
+ * into the return stroke and 66 degrees out for the return stroke into the finisher. It
+ * relabelled the arc as -1, the coil, which had two consequences: the hand jumped by
+ * whatever the two directions differed by, and the wind-up then interpolated from -1 to -1
+ * and did not move the blade *at all* for its whole duration. Fifteen frames of a
+ * completely stationary blade before the finisher, at 30 fps.
+ *
+ * The first attempt was to start the wind-up further along the new sweep, which gave it
+ * something to travel through but made the jump worse. The second was to *measure* the
+ * nearest matching arc, which reduced the jump by five degrees and no more, because the
+ * blade's direction is simply not on the new plane's great circle at any parameter.
+ *
+ * Bridging is exact at both ends by construction: at the first frame the direction is
+ * precisely where the blade was, at the last it is precisely the coil, and in between it is
+ * a great-circle path between them. There is no jump to smooth and no hold to sit through —
+ * the whole 66 degrees becomes wind-up travel, which is what a backswing is.
+ */
+export function swingSweepLocal(plane, s, out, bridge, fromPlane, fromArc) {
+    if (!SWING_SLERP[plane]) return out;
+    swingLocal(plane, s, out, _c0, _c1);
+
+    if (bridge > 0.001 && fromPlane > 0 && SWING_SLERP[fromPlane]) {
+        swingLocal(fromPlane, (fromArc + 1) * 0.5, _m0, _mc0, _mc1);
+        const cosb = clamp(
+            out[0] * _m0[0] + out[1] * _m0[1] + out[2] * _m0[2], -1, 1
+        );
+        const thetab = Math.acos(cosb);
+        const sinb = Math.sin(thetab);
+        // Toward where the blade was, by however much of the wind-up is left.
+        if (sinb > 1e-5) slerpInto(out, out, _m0, thetab, sinb, bridge);
+    }
+    return out;
+}
+
+function swingDirection(
+    plane, s, rX, rY, rZ, uX, uY, uZ, fX, fY, fZ,
+    bridge, fromPlane, fromArc
+) {
+    if (!SWING_SLERP[plane]) return;
+    swingSweepLocal(plane, s, _sd, bridge, fromPlane, fromArc);
 
     // Into the envelope while still in the body frame, which is the only frame the limits
     // mean anything in. This is here as well as at table-build time because `s` runs past
@@ -1544,7 +1612,10 @@ export class Figure {
             const swingW = ch.swingBlend;
             if (a === 1 && swingW > 0.001 && ch.swingPlane > 0) {
                 const s01 = (this.phaseHand + 1) * 0.5;
-                swingDirection(ch.swingPlane, s01, rX, rY, rZ, uX, uY, uZ, fX, fY, fZ);
+                swingDirection(
+                    ch.swingPlane, s01, rX, rY, rZ, uX, uY, uZ, fX, fY, fZ,
+                    ch.swingBridge, ch.swingFromPlane, ch.swingFromArc
+                );
 
                 const extend = SWING_REACH + SWING_EXTEND * Math.sin(Math.PI * clamp(s01, 0, 1));
                 const gx2 = _sh[0] + _sd[0] * extend;

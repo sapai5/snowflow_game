@@ -315,3 +315,167 @@ export async function runHeavy() {
 
     return result();
 }
+
+/**
+ * Continuity through a combo.
+ *
+ * The complaint this exists for: "the player stops between the 2nd and 3rd strike". It was
+ * literal. A chained stroke rebased its phase so the previous stroke's finish became the
+ * new stroke's coil, then set the wind-up to interpolate from the coil *to the coil* — so
+ * the blade did not move for the whole wind-up. Fifteen frames of a perfectly stationary
+ * blade before the finisher at 30 fps, and seven before the return stroke.
+ *
+ * Two things have to hold at once and they pull against each other, which is why this went
+ * wrong twice before it went right: the transition must not jump, and the wind-up must not
+ * hold. Fixing either alone breaks the other — starting the wind-up further along its own
+ * sweep gives it travel and introduces a jump; relabelling it as already arrived removes
+ * the jump and the travel together.
+ */
+export async function runContinuity() {
+    const { ok, result } = suite();
+
+    const { swingSweepLocal } = await import("../src/character/figure.js");
+    const combat = readFileSync(new URL("../src/character/swordCombat.js", import.meta.url), "utf8");
+
+    const d2r = Math.PI / 180;
+    const ang = (a, b) =>
+        Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) / d2r;
+
+    const power = parseFloat(combat.match(/const WINDUP_POWER = ([0-9.]+)/)[1]);
+    const floor = parseFloat(combat.match(/const WINDUP_FLOOR = ([0-9.]+)/)[1]);
+    const curve = (u) => floor * u + (1 - floor) * Math.pow(u, power);
+
+    const stages = [...combat.matchAll(
+        /windup:\s*([0-9.]+),\s*strike:\s*([0-9.]+),\s*recover:\s*([0-9.]+),\s*\n\s*drive:[^,]*,\s*plane:\s*(\d+)/g
+    )].map((m) => ({ windup: +m[1], plane: +m[4] }));
+    const fts = [...combat.matchAll(/followThrough:\s*([0-9.]+)/g)].map((m) => +m[1]);
+    ok(stages.length === 3 && fts.length === 3,
+        "read three stages and three follow-throughs, got " + stages.length + "/" + fts.length);
+
+    const out = [0, 0, 0];
+    const dir = (plane, arc, bridge, fp, fa) => {
+        swingSweepLocal(plane, (arc + 1) / 2, out, bridge, fp, fa);
+        return out.slice();
+    };
+
+    for (const [i, j] of [[0, 1], [1, 2]]) {
+        const label = `stroke ${i + 1} into ${j + 1}`;
+        const fromPlane = stages[i].plane;
+        const toPlane = stages[j].plane;
+        const fromArc = 1 + fts[i];
+        const windup = stages[j].windup;
+
+        // Where the blade is on the last frame of the previous strike, and on the first
+        // frame of the new wind-up.
+        const before = dir(fromPlane, fromArc, 0, 0, 0);
+        const first = dir(toPlane, -1, 1, fromPlane, fromArc);
+        ok(ang(before, first) < 0.5,
+            `${label}: the transition does not jump, ${ang(before, first).toFixed(2)} deg ` +
+            `(jumping straight to the coil was 35 and 71 deg)`);
+
+        // And every frame of the wind-up moves.
+        const frames = Math.round(windup * 30);
+        let prev = first;
+        let minStep = Infinity;
+        let total = 0;
+        for (let f = 1; f <= frames; f++) {
+            const b = 1 - curve(f / frames);
+            const d = dir(toPlane, -1, b, fromPlane, fromArc);
+            minStep = Math.min(minStep, ang(prev, d));
+            total += ang(prev, d);
+            prev = d;
+        }
+        ok(minStep > 0.5,
+            `${label}: no frame of the wind-up holds still, smallest step ` +
+            `${minStep.toFixed(2)} deg — this was 0.00 on every frame`);
+        ok(total > 25,
+            `${label}: the wind-up covers real ground, ${total.toFixed(0)} deg`);
+
+        // And it arrives exactly at the coil, or the strike would begin from the wrong place.
+        const coil = dir(toPlane, -1, 0, 0, 0);
+        ok(ang(prev, coil) < 0.5,
+            `${label}: the wind-up ends at the coil, ${ang(prev, coil).toFixed(3)} deg away`);
+    }
+
+    // ---- the wind-up departs at a real rate --------------------------------
+    {
+        ok(floor > 0.15,
+            "the wind-up curve has a velocity floor, so a chained one leaves the previous " +
+            "stroke's finish already travelling rather than easing out of zero: " + floor);
+        // u^power alone has zero derivative at u=0, which is the same stop in another place.
+        const bare = Math.pow(1 / 15, power);
+        const floored = curve(1 / 15);
+        ok(floored > bare * 1.5,
+            "which moves the first frame appreciably more than the bare exponent would: " +
+            floored.toFixed(4) + " against " + bare.toFixed(4));
+    }
+
+    // ---- the recovery is still cancelled by a chain ------------------------
+    {
+        ok(/this\.queued && allowed && this\.t >= total - s\.recover/.test(combat),
+            "a queued chain starts as soon as the strike ends rather than waiting out the " +
+            "recovery — the recovery is the price of *stopping*, not of continuing");
+    }
+
+    // ---- and the state machine actually publishes the bridge ---------------
+    //
+    // Everything above tests the geometry with a bridge value supplied by the test, which
+    // proves the interpolation works and proves nothing about whether the combo ever sets
+    // it. So this drives the real `SwordCombat` through a real chained string and reads
+    // what it hands the figure. Without it, deleting the publish line leaves every other
+    // assertion in this suite passing.
+    {
+        const { SwordCombat } = await import("../src/character/swordCombat.js");
+        const { makeIntent } = await import("../src/game/intent.js");
+
+        const ch = {
+            position: { x: 0, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 },
+            facing: 0, airborne: false, hitstop: 0, moveScale: 1, surf: 0, intent: null,
+            swingBlend: 0, swingArc: 0, swingPlane: 0, swingSet: 0, swingSnap: 0,
+            swingRebase: 0, swingShift: 0, swingGrip: 0, swingBridge: 0,
+            swingFromPlane: 0, swingFromArc: 0, swingStage: 0, attacking: false,
+        };
+        const sc = new SwordCombat(ch);
+        const rig = { yaw: 0, addTrauma() {} };
+        const it = makeIntent();
+        const dt = 1 / 60;
+
+        // Bridge activity seen during each stage's wind-up.
+        const seen = new Map();
+        for (let f = 0; f < 240; f++) {
+            // Mash, so the string chains all the way through.
+            it.attackPressed = f % 6 === 0;
+            sc.update(dt, rig, it);
+            const s = sc.stage;
+            const timing = sc.stageTiming;
+            if (s > 0 && timing && sc.t < timing.windup) {
+                seen.set(s, Math.max(seen.get(s) || 0, ch.swingBridge));
+            }
+        }
+
+        ok((seen.get(2) || 0) > 0.5,
+            "the return stroke's wind-up is bridged, peak " +
+            (seen.get(2) || 0).toFixed(2));
+        ok((seen.get(3) || 0) > 0.5,
+            "and so is the finisher's, peak " + (seen.get(3) || 0).toFixed(2));
+        ok(ch.swingFromPlane > 0,
+            "with the plane it is bridging from recorded, got " + ch.swingFromPlane);
+
+        // A *cold* opener has nothing to bridge from: the blade is at guard, not mid-combo.
+        const ch2 = { ...ch, swingBridge: 0, swingFromPlane: 0, swingArc: 0, swingBlend: 0 };
+        const sc2 = new SwordCombat(ch2);
+        const it2 = makeIntent();
+        it2.attackPressed = true;
+        sc2.update(dt, rig, it2);
+        it2.attackPressed = false;
+        let coldBridge = 0;
+        for (let f = 0; f < 12; f++) {
+            sc2.update(dt, rig, it2);
+            coldBridge = Math.max(coldBridge, ch2.swingBridge);
+        }
+        ok(coldBridge === 0,
+            "an opener from guard bridges from nothing, got " + coldBridge.toFixed(3));
+    }
+
+    return result();
+}

@@ -211,6 +211,19 @@ const STRIKE_FLOOR = 0.34;
  */
 const WINDUP_POWER = 1.7;
 
+
+
+/**
+ * Velocity floor on the wind-up, as a fraction.
+ *
+ * `u^WINDUP_POWER` has zero derivative at u=0, so a wind-up that begins the instant a
+ * strike ends begins by not moving — which is the same stop in a different place. Mixing in
+ * a linear term means the blade leaves the previous stroke's finish already travelling.
+ *
+ * Exactly the reasoning behind `STRIKE_FLOOR`, applied to the other end of the reversal.
+ */
+const WINDUP_FLOOR = 0.30;
+
 /**
  * Time scale during the hit-stop. Slow motion, not a freeze.
  *
@@ -260,6 +273,9 @@ export class SwordCombat {
         this.chain = 0;
         /** Arc value this attack's wind-up started from. -1 when chained. */
         this._startArc = 0;
+        /** The plane and arc the blade is bridged *from* during a chained wind-up. */
+        this._fromPlane = 0;
+        this._fromArc = 0;
     }
 
     /** True from the frame an attack begins to the frame it ends. */
@@ -426,12 +442,24 @@ export class SwordCombat {
         // chained wind-up holds the coil (the body re-orients around a blade that
         // is already back); a cold one draws the blade back from guard.
         if (stage > 1 && this.lastStage >= 1) {
-            const shift = 2 + STAGES[this.lastStage - 1].followThrough;
+            const prev = STAGES[this.lastStage - 1];
+            const shift = 2 + prev.followThrough;
             this.ch.swingArc -= shift;
             this.ch.swingRebase -= shift;
             this._startArc = -1;
+            // Where the blade actually is, for the wind-up to travel *from*. The rebase
+            // above puts the arc at the coil, which is where the new stroke must start
+            // from — but it is not where the blade is, and pretending otherwise is what
+            // left the wind-up with nothing to move through. The figure bridges between
+            // the two; see `swingDirection`.
+            //
+            // Analytically the previous strike's curve finishes at `1 + followThrough`.
+            this._fromPlane = prev.plane;
+            this._fromArc = 1 + prev.followThrough;
         } else {
             this._startArc = 0;
+            this._fromPlane = 0;
+            this._fromArc = 0;
         }
         this.stage = stage;
         this.t = 0;
@@ -508,6 +536,7 @@ export class SwordCombat {
         let shift = 0;
         let snap = 0;
         let gripWant = 0;
+        let bridge = 0;
 
         if (this.stage > 0) {
             const s = STAGES[this.stage - 1];
@@ -525,13 +554,19 @@ export class SwordCombat {
                 // recovery, so the two-handed grip is part of the anticipation rather
                 // than something that appears at the moment of contact.
                 gripWant = s.twoHand ? 1 : 0;
-                // Accelerating into the coil — see `WINDUP_POWER`. It leaves guard
-                // gently and arrives at the coil already travelling, so the reversal
-                // into the strike is an instant rather than a rest. From guard that
-                // is a full draw; chained, `_startArc` is already the coil and this
-                // barely moves while the body re-orients into the new plane.
-                const w = Math.pow(u, WINDUP_POWER);
+                // Accelerating into the coil — see `WINDUP_POWER`. It leaves guard gently
+                // and arrives at the coil already travelling, so the reversal into the
+                // strike is an instant rather than a rest.
+                //
+                // Floored, so a chained wind-up departs the previous stroke's finish at a
+                // real rate instead of easing out of zero — see `WINDUP_FLOOR`.
+                const w = WINDUP_FLOOR * u + (1 - WINDUP_FLOOR) * Math.pow(u, WINDUP_POWER);
+                // A chained wind-up's arc holds at the coil, because the coil is where the
+                // strike must begin; the travel between the previous stroke's finish and
+                // that coil is the *bridge*, and it runs off the same curve so the blade's
+                // journey and the body's re-orientation are one motion rather than two.
                 arc = this._startArc + (-1 - this._startArc) * w;
+                bridge = this._fromPlane > 0 ? 1 - w : 0;
                 set = easeOutCubic(u);
                 shift = -easeOutCubic(u);
             } else if (t < tRecover) {
@@ -599,6 +634,13 @@ export class SwordCombat {
             ch.swingGrip, gripWant * on,
             gripWant > ch.swingGrip ? 7 : 14, h
         );
+
+        // Not filtered. The bridge is already a smooth function of the wind-up's own curve,
+        // and damping it would leave a residue after the wind-up ended — a blade still
+        // being pulled toward the previous stroke's direction while the strike has started.
+        ch.swingBridge = bridge * on;
+        ch.swingFromPlane = this._fromPlane;
+        ch.swingFromArc = this._fromArc;
         ch.swingShift = expDamp(ch.swingShift, shift * on, 22, h);
         ch.swingSnap = expDamp(ch.swingSnap, snap, 20, h);
         if (ch.swingBlend < 0.002 && this.stage === 0) {

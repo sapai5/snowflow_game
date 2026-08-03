@@ -352,6 +352,18 @@ export class CharacterController {
          */
         this.swingGrip = 0;
         /**
+         * How much of a chained wind-up is still to travel, 1 down to 0.
+         *
+         * While it is non-zero the figure interpolates the hand's direction *between
+         * planes* — from where the previous stroke left the blade to where this one coils.
+         * Without it a chained wind-up held the blade perfectly still for its whole
+         * duration, which is what a combo stopping between strokes looked like.
+         */
+        this.swingBridge = 0;
+        /** Which plane the blade is being bridged *from*, and at what arc. */
+        this.swingFromPlane = 0;
+        this.swingFromArc = 0;
+        /**
          * Phase shift the figure's lag springs must apply this frame, then clear.
          * Written when a chained attack rebases the arc into its own plane, so the
          * springs move with it instead of seeing a two-unit step.
