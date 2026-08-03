@@ -35,13 +35,17 @@ import { whenReady } from "../core/gpuUtil.js";
 /**
  * Samples in the ribbon, and how long each survives.
  *
- * The longest strike in the combo is 0.34 s, and the ribbon has to outlast it or the
- * arc is clipped before the swing that made it has finished. Twenty-eight samples at
- * sixty frames a second is 0.46 s of buffer against a 0.34 s life, which leaves room
- * for a frame-rate dip without the head of the trail eating its own tail.
+ * The longest strike in the combo is 0.44 s, and the ribbon has to outlast it or the arc
+ * is clipped before the swing that made it has finished. A test asserts that relationship
+ * rather than trusting these two files to be edited together — which is how it was caught
+ * when the strikes were lengthened to stop them looking choppy, and the trail silently
+ * became shorter than the swing.
+ *
+ * Thirty-four samples at sixty frames a second is 0.57 s of buffer against a 0.50 s life,
+ * which leaves room for a frame-rate dip without the head of the trail eating its tail.
  */
-const SAMPLES = 28;
-const LIFE = 0.34;
+const SAMPLES = 34;
+const LIFE = 0.50;
 
 /**
  * Where the blade's span sits inside the ribbon, 0 at the guard and 1 at the point.

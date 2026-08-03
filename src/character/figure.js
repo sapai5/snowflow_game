@@ -212,26 +212,131 @@ const ARM_C = 34;
 const SWING_ARCS = [
     null,
     {
-        // 1 — Quick Slash. High-left down to low-right: a tight 114-degree
-        // diagonal whose wind-up only just passes the hip line. A jab that
-        // telegraphs is not a jab.
-        hand: { fromYaw: -52, fromElev: 30, toYaw: 62, toElev: -28, bow: 24 },
+        // 1 — Quick Slash. A forehand descending diagonal: high on the sword side,
+        // down across the centre to the off hip.
+        //
+        // This used to run the other way — coiled high-*left* and cut to the right —
+        // which is a backhand, and a backhand is the one stroke a right shoulder cannot
+        // start comfortably: getting the hand high and across the chest needs adduction
+        // and internal rotation at the same time, and the arm has to route somewhere.
+        // The forehand is the stroke the joint is built for, so it is the one the fast
+        // attack uses.
+        hand: { fromYaw: 46, fromElev: 34, toYaw: -40, toElev: -26, bow: 22 },
     },
     {
-        // 2 — the Heavy Finisher. Coiled high-left where the return stroke ended,
-        // driven down and across the whole body to past the right hip: the big
-        // descending cut, on the diagonal neither light stroke used, with the
-        // widest silhouette the shoulder can carry.
-        hand: { fromYaw: -98, fromElev: 46, toYaw: 95, toElev: -24, viaYaw: 8, viaElev: 32 },
+        // 2 — the Heavy Finisher. A vertical overhead cut: the hand raised above the head
+        // on the sword side, then driven straight down the centre line to below the belt.
+        //
+        // Two things were wrong with what this was, and they had to be fixed together.
+        //
+        // The coil was at yaw -98, elevation +46 — up and ninety-eight degrees across the
+        // body. A right arm cannot go there. Two-bone IK does not fail on an unreachable
+        // *attitude*, though; it only fails on an unreachable distance, so it returned a
+        // pose, and the pose it returned was the arm wrapping over the head. That is what
+        // this looked like in play.
+        //
+        // Moving the coil to the sword side fixed the arm and broke the string: a
+        // descending cut from high-right to low-left is the jab's plane, and the finisher
+        // would have been the same stroke twice, slower. So this is vertical rather than
+        // diagonal — twenty degrees of yaw against a hundred and twenty of elevation,
+        // straight down the middle. That is also the heaviest cut a shoulder can throw,
+        // because the whole arc is in the plane the joint flexes through, and it is the
+        // one plane the two light strokes leave unused.
+        //
+        // The via sits forward and low of the direct path, which brings the blade down in
+        // *front* of the body rather than through it — the spherical interpolation between
+        // two nearly antipodal directions is otherwise free to take either side.
+        hand: { fromYaw: 20, fromElev: 76, toYaw: -4, toElev: -44, viaYaw: 6, viaElev: 26 },
     },
     {
-        // 3 — the Return Slash. The mirror stroke of the jab: coiled low-right
-        // where the jab's follow-through left the blade, rising back along the
-        // opposite diagonal to high-left. Slightly wider than the jab — the
+        // 3 — the Return Slash. The mirror of the jab: coiled low across the body where
+        // the jab's follow-through left it, rising back out along the opposite diagonal
+        // to high on the sword side.
+        //
+        // Rising and outward, so it is abduction and external rotation — the strongest
+        // and freest direction a shoulder has. Slightly wider than the jab, because the
         // string escalates.
-        hand: { fromYaw: 92, fromElev: -34, toYaw: -60, toElev: 32, bow: 26 },
+        hand: { fromYaw: -44, fromElev: -28, toYaw: 58, toElev: 30, bow: 26 },
     },
 ];
+
+/**
+ * The shoulder's envelope, in the body frame, for the sword arm.
+ *
+ * Two-bone IK will solve for any target within reach, including targets a shoulder
+ * cannot present a hand to — it has no concept of a joint limit, so an impossible target
+ * does not fail, it returns a pose that is merely wrong. Every odd-looking arm in this
+ * game has come from exactly that, and the fix is to make the impossible target
+ * unreachable rather than to keep correcting the poses it produces.
+ *
+ * The numbers are the useful range of a shoulder with the torso held still, which is
+ * narrower than the anatomical maximum because reaching the extremes needs the spine and
+ * the scapula and the figure's trunk is already doing its own thing:
+ *
+ *   elevation   about 78 degrees down to 96 up. Past 96 the hand is behind the vertical
+ *               and therefore behind the head, which is precisely the artefact this
+ *               exists to prevent.
+ *   crossing    the arm crosses the midline furthest when it is low — a hand can reach
+ *               the opposite hip easily and the opposite ear not at all. So the inward
+ *               limit tightens as the arm rises: 58 degrees past centre at shoulder
+ *               height, only 12 overhead.
+ *   behind      extension backward shrinks the same way and for the same reason, from
+ *               122 degrees at shoulder height to 78 overhead.
+ *
+ * Applied to the authored endpoints when the table is built, and again to the final
+ * direction each frame — the follow-through *extrapolates* past the end of the arc, so
+ * the endpoints being legal is not sufficient on its own.
+ */
+const SH_ELEV_MIN = -78;
+const SH_ELEV_MAX = 96;
+
+function shoulderYawRange(elevDeg, out) {
+    const rise = Math.max(0, elevDeg) / 90;
+    const drop = Math.max(0, -elevDeg) / 90;
+    // Low and across is easy; high and across is not.
+    out[0] = -58 + 46 * rise - 24 * drop;
+    out[1] = 122 - 44 * rise - 18 * drop;
+    return out;
+}
+
+const _range = [0, 0];
+
+/**
+ * Clamp a pair of authored angles into the envelope.
+ *
+ * @returns {[number, number]} yaw, elevation, both in degrees
+ */
+function clampShoulderAngles(yawDeg, elevDeg) {
+    const e = clamp(elevDeg, SH_ELEV_MIN, SH_ELEV_MAX);
+    shoulderYawRange(e, _range);
+    return [clamp(yawDeg, _range[0], _range[1]), e];
+}
+
+/**
+ * Clamp a unit direction into the envelope, in place.
+ *
+ * Four transcendentals, and only while a swing is running. The alternative — building the
+ * limit into the interpolation itself — would mean the arc no longer passes through the
+ * angles it was authored with, which is worse: an arc would then mean something different
+ * depending on where it sat in the envelope.
+ *
+ * @param {number[]} d unit direction, body frame: x right, y up, z forward
+ */
+function clampShoulderDir(d) {
+    const elev = (Math.asin(clamp(d[1], -1, 1)) * 180) / Math.PI;
+    const yaw = (Math.atan2(d[0], d[2]) * 180) / Math.PI;
+    const e = clamp(elev, SH_ELEV_MIN, SH_ELEV_MAX);
+    shoulderYawRange(e, _range);
+    const y = clamp(yaw, _range[0], _range[1]);
+    if (y === yaw && e === elev) return d;
+    const er = (e * Math.PI) / 180;
+    const yr = (y * Math.PI) / 180;
+    const ce = Math.cos(er);
+    d[0] = ce * Math.sin(yr);
+    d[1] = Math.sin(er);
+    d[2] = ce * Math.cos(yr);
+    return d;
+}
 
 /**
  * The arcs above, precomputed: the sword hand's sweep as three unit control
@@ -247,11 +352,19 @@ const SWING_ARCS = [
 const SWING_SLERP = SWING_ARCS.map((entry) => {
     if (!entry) return null;
     const h = entry.hand;
-    const a = dirFromAngles(h.fromYaw, h.fromElev);
-    const b = dirFromAngles(h.toYaw, h.toElev);
+    // Through the envelope on the way in, so an arc cannot be authored outside it. This
+    // is a build-time clamp on three angle pairs; it costs nothing and it means the
+    // numbers in the table above are the intent rather than the truth.
+    const from = clampShoulderAngles(h.fromYaw, h.fromElev);
+    const to = clampShoulderAngles(h.toYaw, h.toElev);
+    const a = dirFromAngles(from[0], from[1]);
+    const b = dirFromAngles(to[0], to[1]);
     const via = h.viaYaw === undefined
         ? bowedMidpoint(a, b, ((h.bow || 0) * Math.PI) / 180)
-        : dirFromAngles(h.viaYaw, h.viaElev);
+        : (() => {
+            const v = clampShoulderAngles(h.viaYaw, h.viaElev);
+            return dirFromAngles(v[0], v[1]);
+        })();
     const pair = (p, q) => {
         const cos = clamp(p[0] * q[0] + p[1] * q[1] + p[2] * q[2], -1, 1);
         const theta = Math.acos(cos);
@@ -368,6 +481,13 @@ function swingDirection(plane, s, rX, rY, rZ, uX, uY, uZ, fX, fY, fZ) {
     const theta = Math.acos(cos);
     slerpInto(_sd, _c0, _c1, theta, Math.sin(theta), s);
 
+    // Into the envelope while still in the body frame, which is the only frame the limits
+    // mean anything in. This is here as well as at table-build time because `s` runs past
+    // 1 during the follow-through: the arc *extrapolates* beyond its authored end, so
+    // legal endpoints do not make the whole path legal. The old finisher overshot 45
+    // degrees past a target that was already outside the joint.
+    clampShoulderDir(_sd);
+
     const wx = _sd[0];
     const wy = _sd[1];
     const wz = _sd[2];
@@ -462,7 +582,27 @@ function solveTwoBone(rx, ry, rz, tx, ty, tz, px, py, pz, l1, l2, out) {
     const d = px * dx + py * dy + pz * dz;
     let ox = px - dx * d, oy = py - dy * d, oz = pz - dz * d;
     let ol = Math.hypot(ox, oy, oz);
-    if (ol < 1e-5) { ox = 0; oy = 0; oz = 1; ol = 1; }
+    if (ol < 1e-3) {
+        // The pole is parallel to the limb, so it says nothing about which way the joint
+        // bends. Fall back to *any* vector perpendicular to the axis, built by crossing
+        // with whichever cardinal is least aligned with it — that choice is what keeps
+        // the cross product from being degenerate in turn.
+        //
+        // This used to be world +z, which is wrong for a character facing any other way,
+        // and it was reachable: a hand raised overhead gives a vertical limb axis, and the
+        // elbow pole that drove it was also vertical. The pole is kept lateral for a
+        // raised arm now, so this is a net rather than a code path — but a net that
+        // returns a wrong-facing elbow is not much of one.
+        const ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
+        let sx = 0, sy = 0, sz = 0;
+        if (ax <= ay && ax <= az) sx = 1;
+        else if (ay <= az) sy = 1;
+        else sz = 1;
+        ox = sy * dz - sz * dy;
+        oy = sz * dx - sx * dz;
+        oz = sx * dy - sy * dx;
+        ol = Math.hypot(ox, oy, oz) || 1;
+    }
     ox /= ol; oy /= ol; oz /= ol;
 
     out[0] = rx + dx * a + ox * h;
@@ -1452,9 +1592,31 @@ export class Figure {
                 const e01 = clamp(((a === 1 ? this.phaseShoulder : this.phaseChest) + 1) * 0.5, 0, 1.2);
                 // Coil: elbow high and pulled back. Strike: low, out, and forward.
                 const cw = 1 - e01;
-                const ex = rX * (sgn * (0.30 + 0.55 * e01)) + uX * (0.85 * cw - 0.55 * e01) + fX * (-0.6 * cw + 0.35 * e01);
-                const ey = rY * (sgn * (0.30 + 0.55 * e01)) + uY * (0.85 * cw - 0.55 * e01) + fY * (-0.6 * cw + 0.35 * e01);
-                const ez = rZ * (sgn * (0.30 + 0.55 * e01)) + uZ * (0.85 * cw - 0.55 * e01) + fZ * (-0.6 * cw + 0.35 * e01);
+                let lat = sgn * (0.30 + 0.55 * e01);
+                let vert = 0.85 * cw - 0.55 * e01;
+                let fwd = -0.6 * cw + 0.35 * e01;
+
+                // How high the hand is in the body's own frame, +1 straight up. `_sd` is
+                // the swing direction this frame, already in world space, so the body's up
+                // axis projects it back.
+                const hu = a === 1
+                    ? clamp(_sd[0] * uX + _sd[1] * uY + _sd[2] * uZ, -1, 1)
+                    : 0;
+                const high = clamp((hu - 0.25) / 0.6, 0, 1);
+
+                // A raised arm's elbow points out to the side and a little down. It is
+                // never above the hand, because the hand is already above the shoulder and
+                // there is no room left — and more importantly, a vertical pole on a
+                // vertical limb axis is parallel to it, which leaves the elbow direction
+                // undefined and flipping between frames. The overhead finisher spent its
+                // whole coil in that state.
+                lat += high * 0.90;
+                vert = vert * (1 - high) - high * 0.55;
+                fwd += high * 0.25;
+
+                const ex = rX * lat + uX * vert + fX * fwd;
+                const ey = rY * lat + uY * vert + fY * fwd;
+                const ez = rZ * lat + uZ * vert + fZ * fwd;
                 px += (ex - px) * ch.swingBlend;
                 py += (ey - py) * ch.swingBlend;
                 pz += (ez - pz) * ch.swingBlend;

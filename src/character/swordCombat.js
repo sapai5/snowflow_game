@@ -92,10 +92,20 @@ import { angleDamp } from "./controller.js";
  */
 const STAGES = [
     {
-        windup: 0.12, strike: 0.19, recover: 0.15,
+        // The strike used to be 0.19 s. At 60 fps that is eleven frames for 123
+        // degrees of hand travel, and at the velocity peak the arm moved 17 degrees
+        // between frames — at 30 fps, 35. That is not a fast swing, it is an
+        // undersampled one: the pose is correct on every frame and the eye is given
+        // nothing to join them with, which is what reads as choppy. The blade's own
+        // trail is subdivided and stays smooth, which is why the *arm* was the part
+        // that looked wrong.
+        //
+        // 0.28 s with the shorter arc holds the peak under 18 degrees a frame at 30 fps
+        // and under 9 at 60.
+        windup: 0.15, strike: 0.28, recover: 0.17,
         drive: 1.7, plane: 1, snap: 0.65, set: 0.45, stomp: 0.3, trauma: 0.10,
         // Overshoot past the target line, in units of half the sweep. The jab's
-        // arc is 114 degrees, so 0.70 half-sweeps is ~40 degrees of blade travel
+        // arc is 101 degrees, so 0.70 half-sweeps is ~35 degrees of blade travel
         // past centre before it catches itself.
         followThrough: 0.70,
         // Slow-motion at contact, and its length. Not a freeze — see `HITSTOP_RATE`.
@@ -105,7 +115,7 @@ const STAGES = [
         // The return stroke. Chained, most of this wind-up never plays — the
         // rebase puts the blade at the coil already and the body just re-orients.
         // A touch wider and heavier than the first: the string is escalating.
-        windup: 0.14, strike: 0.20, recover: 0.16,
+        windup: 0.17, strike: 0.32, recover: 0.18,
         drive: 2.2, plane: 3, snap: 0.50, set: 0.55, stomp: 0.45, trauma: 0.13,
         followThrough: 0.62,
         hitstop: 0.05,
@@ -120,9 +130,13 @@ const STAGES = [
         // The recovery is shorter than the wind-up on purpose. A long recovery on a
         // small overshoot gives the follow-through a slow apex, which is a stop by
         // another name; a brisk one carries the blade over the top and back.
-        windup: 0.34, strike: 0.34, recover: 0.30,
+        windup: 0.38, strike: 0.44, recover: 0.30,
         drive: 8.5, plane: 2, snap: 0.0, set: 1.0, stomp: 1.0, trauma: 0.30,
-        // ~45 degrees on the big descending arc, in the same half-sweep units.
+        // ~31 degrees past the end of the descending arc, in the same half-sweep units.
+        // The cut is vertical now and it ends below the belt, so the overshoot carries the
+        // hand down and slightly across rather than around the side — a right hand that has
+        // finished a vertical cut has run out of shoulder, not out of momentum, and the
+        // envelope clamp catches it if this is ever raised too far.
         followThrough: 0.51,
         hitstop: 0.075,
     },
@@ -148,8 +162,18 @@ const CHAIN_WINDOW = 0.50;
  * only instants of zero velocity left in the whole attack are the two genuine
  * changes of direction, each one frame long.
  */
-const STRIKE_POWER = 1.8;
-const STRIKE_FLOOR = 0.24;
+/*
+ * Softened from 1.8 / 0.24.
+ *
+ * The exponent is what concentrates the travel into the middle of the strike, and at 1.8
+ * it put a 1.6:1 ratio between the peak frame and the average one. That ratio is the
+ * point of the curve — a swing should snap — but it is also multiplied by however few
+ * frames the strike lasts, and the two together were what made the fast attacks look like
+ * they skipped. Lengthening the strike and flattening the peak share the work; either
+ * alone would have had to be taken too far.
+ */
+const STRIKE_POWER = 1.45;
+const STRIKE_FLOOR = 0.34;
 
 /**
  * How fast the wind-up loads, as an exponent on its own curve.
