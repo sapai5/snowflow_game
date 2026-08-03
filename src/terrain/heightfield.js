@@ -31,6 +31,17 @@ export const AUX_RES = 2048;
 /** Half-extent the player is kept inside, leaving margin for the far rings. */
 export const PLAY_RADIUS = 620;
 
+/**
+ * How far from the middle a *player* may go, metres.
+ *
+ * The world is 620 m in radius — 1.2 million square metres — which is right for a
+ * landscape and absurd for a four-player fight: they would never meet, and the
+ * slower sprint and surf speeds make crossing it slower still. Play is clamped to a
+ * small fraction of it while the terrain keeps rendering to the horizon, so nothing
+ * is lost visually and four players find each other in seconds.
+ */
+export const COMBAT_RADIUS = 120;
+
 export class Heightfield {
     /** @param {import("@babylonjs/core/scene").Scene} scene */
     constructor(scene) {
@@ -212,9 +223,15 @@ export class Heightfield {
         return out;
     }
 
-    /** Clamp a world position to the playable area, in place. */
-    clampToPlayArea(v) {
-        const r = PLAY_RADIUS;
+    /**
+     * Clamp a world position to the playable area, in place.
+     *
+     * @param {any} v
+     * @param {number} [radius] defaults to the combat area, not the world's own
+     *   radius — see `COMBAT_RADIUS`.
+     */
+    clampToPlayArea(v, radius) {
+        const r = radius || COMBAT_RADIUS;
         const d = Math.hypot(v.x, v.z);
         if (d > r) {
             const k = r / d;

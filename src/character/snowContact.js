@@ -16,9 +16,12 @@
  *              trail is a trail and not a row of disconnected prints.
  *   surf wake  a deep continuous groove with berms thrown to the outside of the
  *              turn. This is the centrepiece's mark on the world.
+ *   landing    one wide crater and a radial burst when a jump touches down.
  *
  * Zero allocation: brushes are pushed straight into the field's staging array.
  */
+
+import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 
 /**
  * Boot geometry, metres. `WIDTH` is the short-axis radius, so the print is
@@ -33,17 +36,42 @@ const BOOT_ELONG = 1.7;
 const SURF_WIDTH = 0.30;
 const SURF_ELONG = 2.6;
 
+/**
+ * Sword cut geometry. Narrow, long and shallow: the short-axis radius is 7 cm and
+ * the cut runs five times that across the swing.
+ */
+const SLASH_WIDTH = 0.07;
+const SLASH_ELONG = 5.0;
+/** How close the point has to come to the snow to cut it, metres. */
+const SLASH_REACH = 0.34;
+
+/** Scratch for the blade tip. */
+const _tip = new Vector3();
+/** Scratch for a point along the blade. */
+const _blade = new Vector3();
+
+function clamp01(v) {
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 export class SnowContact {
     /**
      * @param {import("./controller.js").CharacterController} character
      * @param {import("../terrain/deformation.js").DeformationField} field
      * @param {import("./figure.js").Figure} [figure] posed skeleton, if built
      * @param {import("../vfx/particles.js").SprayField} [spray]
+     * @param {import("./sword.js").IceSword} [sword] the blade, for slash marks
      */
-    constructor(character, field, figure, spray) {
+    constructor(character, field, figure, spray, sword) {
         this.character = character;
         this.field = field;
         this.spray = spray || null;
+        /**
+         * The blade, when there is one. Read only on the frame a strike lands, and
+         * read rather than told because only the sword knows where its own point
+         * ended up after the hand that carries it was posed.
+         */
+        this.sword = sword || null;
         /**
          * The posed figure, when there is one.
          *
@@ -61,6 +89,9 @@ export class SnowContact {
         this._sinceSplat = 0;
         this._prevX = character.position.x;
         this._prevZ = character.position.z;
+        /** Last frame's blade tip, for the trail. */
+        this._prevTip = new Vector3();
+        this._tipInit = false;
     }
 
     /** @param {number} dt seconds */
@@ -74,8 +105,17 @@ export class SnowContact {
         this._prevX = ch.position.x;
         this._prevZ = ch.position.z;
 
-        if (ch.surf > 0.02) this._surf(dt, moved);
-        if (ch.surf < 0.98) this._walk(dt, moved);
+        // Nothing is touching the snow in mid-air. Without this the groove keeps
+        // being cut under a character who is two metres above it.
+        if (!ch.airborne) {
+            if (ch.surf > 0.02) this._surf(dt, moved);
+            if (ch.surf < 0.98) this._walk(dt, moved);
+        }
+
+        if (ch.landed) this._land();
+        if (ch.stompHit) this._stomp();
+        if (ch.slashHit) this._slash();
+        if (ch.swingStage > 0) this._frostTrail(dt);
 
         // Footfalls fire regardless of mode; the gait suppresses them while
         // surfing because the feet are on the board.
@@ -159,6 +199,246 @@ export class SnowContact {
                 clod ? 0.014 + Math.random() * 0.012 : 0.020 + Math.random() * 0.030,
                 clod ? 0.55 + Math.random() * 0.35 : 0.55 + Math.random() * 0.60,
                 clod
+            );
+        }
+    }
+
+    /**
+     * Touchdown from a jump.
+     *
+     * Both feet arrive together and carry the whole body weight, so this is one
+     * wide crater rather than two boot prints — deeper and more thrown mass than
+     * any single step, scaled by how hard the landing was. The gait is
+     * suppressed in the air, so nothing else stamps here.
+     */
+    _land() {
+        const ch = this.character;
+        const k = ch.landImpact;
+
+        this.field.brush(
+            ch.position.x, ch.position.z,
+            BOOT_WIDTH * (1.7 + 0.9 * k),
+            0.20 + 0.34 * k,        // depth
+            0.14 + 0.24 * k,        // the rim takes what the crater displaces
+            1.0,                    // both boots pack it hard
+            0,                      // no ice
+            ch.facing,
+            1.25,                   // nearly round: two feet side by side
+            1.0
+        );
+
+        this._burst(ch.position.x, ch.position.y, ch.position.z, 0.35 + 0.85 * k);
+    }
+
+    /**
+     * The ring of snow a landing throws.
+     *
+     * Radially outward rather than backward — a landing displaces snow in every
+     * direction at once, which is what separates it visually from the scooped,
+     * rearward kick of a stride.
+     */
+    _burst(x, y, z, strength) {
+        const sp = this.spray;
+        if (!sp) return;
+        const ch = this.character;
+        const n = 12 + ((strength * 40) | 0);
+
+        for (let i = 0; i < n; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const out = (0.7 + Math.random() * 2.4) * strength;
+            const clod = Math.random() < 0.18 ? 1 : 0;
+            const ca = Math.cos(a);
+            const sa = Math.sin(a);
+
+            sp.emit(
+                x + ca * 0.11, y + 0.02 + Math.random() * 0.06, z + sa * 0.11,
+                // Carried along by whatever the character was doing: landing out
+                // of a surf run throws the ring forward with it.
+                ca * out + ch.velocity.x * 0.3,
+                (0.5 + Math.random() * 1.7) * (0.5 + strength) * (clod ? 1.2 : 1.0),
+                sa * out + ch.velocity.z * 0.3,
+                clod ? 0.014 + Math.random() * 0.012 : 0.020 + Math.random() * 0.030,
+                0.5 + Math.random() * 0.75,
+                clod
+            );
+        }
+    }
+
+    /**
+     * A sword strike that reaches the snow.
+     *
+     * Only if the point is actually near the surface. That gate is the whole
+     * design: a slash held high leaves nothing, a low one opens a clean narrow
+     * cut and throws a fan of powder off the edge, and the player learns the
+     * difference in one swing without being told. The cut is much narrower and
+     * shallower than a boot print and it compresses hard — this is an edge parting
+     * snow, not a body displacing it.
+     */
+    _slash() {
+        const ch = this.character;
+        const sw = this.sword;
+        if (!sw) return;
+
+        sw.tipPosition(_tip);
+        const ground = ch.terrain.heightAt(_tip.x, _tip.z);
+        const clearance = _tip.y - ground;
+        // Above this the blade never touched anything.
+        if (clearance > SLASH_REACH) return;
+
+        // Deeper the further through the snow the point actually is, and the
+        // heavier the attack behind it.
+        const bite = clamp01(1 - clearance / SLASH_REACH) * (0.4 + 0.6 * ch.slashStrength);
+
+        this.field.brush(
+            _tip.x, _tip.z,
+            SLASH_WIDTH,
+            0.22 + 0.30 * bite,     // depth
+            0.06 + 0.10 * bite,     // very little berm: an edge parts, it does not plough
+            1.0,                    // and it packs the walls of the cut hard
+            0,                      // no ice
+            ch.facing + Math.PI * 0.5, // across the swing, which is across the body
+            SLASH_ELONG,
+            0.7
+        );
+
+        this._fan(_tip.x, ground, _tip.z, bite, ch.slashStrength);
+    }
+
+    /**
+     * The powder a cutting edge throws.
+     *
+     * Sideways and up along the swing rather than backward like a boot: the snow
+     * leaves along the blade, which is what makes a slash read as a slash and not
+     * as a footfall in the wrong place.
+     */
+    _fan(x, y, z, bite, strength) {
+        const sp = this.spray;
+        if (!sp) return;
+        const ch = this.character;
+        const n = 10 + ((bite * 30 + strength * 16) | 0);
+
+        // Across the body: the direction the edge is travelling.
+        const ax = Math.cos(ch.facing);
+        const az = -Math.sin(ch.facing);
+
+        for (let i = 0; i < n; i++) {
+            const spread = (Math.random() - 0.5) * 1.4;
+            const out = 1.4 + Math.random() * 3.6 * (0.4 + bite);
+            const clod = Math.random() < 0.14 ? 1 : 0;
+
+            sp.emit(
+                x + ax * spread * 0.10, y + 0.03 + Math.random() * 0.10, z + az * spread * 0.10,
+                ax * out + spread * 1.2 + ch.velocity.x * 0.25,
+                (1.2 + Math.random() * 2.2) * (0.5 + bite),
+                az * out + spread * 1.2 + ch.velocity.z * 0.25,
+                clod ? 0.012 + Math.random() * 0.010 : 0.016 + Math.random() * 0.026,
+                0.45 + Math.random() * 0.6,
+                clod
+            );
+        }
+    }
+
+    /**
+     * The front foot taking the weight of a strike.
+     *
+     * Deeper and wider than a walking print, because it is not a step — it is the
+     * whole body's momentum arriving through one boot. The figure knows where that
+     * foot is; asking it is how this stays in the same place as the pose rather
+     * than near it.
+     */
+    _stomp() {
+        const ch = this.character;
+        const fig = this.figure;
+        if (!fig) return;
+
+        // Foot 0 is the leading one in the fighting stance.
+        const px = fig.plant[0];
+        const py = fig.plant[1];
+        const pz = fig.plant[2];
+        const k = 0.55 + 0.45 * ch.slashStrength;
+
+        this.field.brush(
+            px, pz,
+            BOOT_WIDTH * (1.1 + 0.35 * k),
+            0.20 + 0.24 * k,
+            0.12 + 0.18 * k,
+            1.0,
+            0,
+            ch.facing,
+            BOOT_ELONG,
+            1.0
+        );
+        this._kick(px, py, pz, 0.6 + 0.8 * k);
+    }
+
+    /**
+     * Frost shed off the blade, keyed to how far the point actually moved.
+     *
+     * Not an effect on top of the animation — the readable part of it. There is no
+     * per-object motion blur here, so an exponential sweep that crosses half its
+     * arc in the last three frames has nothing joining up the poses it passes
+     * through. Grains laid *along the segment the tip travelled* do that job: they
+     * fill the gap between frames, which is what motion blur would have done, and
+     * the eye follows them instead of seeing the blade teleport.
+     *
+     * Driven off the measured tip displacement rather than off the swing phase.
+     * That is the whole reason this works now: with the lag chain, the hips have
+     * finished and the phase looks static at exactly the moment the blade is
+     * travelling fastest, so anything keyed to the phase emits at the wrong time.
+     *
+     * @param {number} dt
+     */
+    _frostTrail(dt) {
+        const sp = this.spray;
+        const sw = this.sword;
+        if (!sp || !sw) return;
+        const ch = this.character;
+
+        sw.tipPosition(_tip);
+        if (!this._tipInit) {
+            this._prevTip.copyFrom(_tip);
+            this._tipInit = true;
+            return;
+        }
+        const bx = this._prevTip.x - _tip.x;
+        const by = this._prevTip.y - _tip.y;
+        const bz = this._prevTip.z - _tip.z;
+        const moved = Math.hypot(bx, by, bz);
+        this._prevTip.copyFrom(_tip);
+
+        // A walking carry moves the point a centimetre or two a frame; a strike
+        // moves it most of a metre. Only the second one is a trail, and the trail
+        // itself scales with the speed: more grains (length), and bigger ones
+        // (brightness), off a faster edge.
+        if (moved < 0.07) return;
+        const speedK = Math.min(1, (moved - 0.07) / 0.45);
+
+        // Denser and coarser than it was. These grains had been trimmed small and
+        // short-lived while they were the *only* thing marking a swing, and once a lit
+        // ribbon was drawn over the same arc they disappeared underneath it. They are
+        // the matter thrown off the edge and the ribbon is the light left behind it;
+        // both have to be legible or the swing loses half of what it is made of.
+        const n = Math.min(18, Math.ceil(moved / 0.032));
+        for (let i = 0; i < n; i++) {
+            // Along the blade, weighted to the outer half where the speed is.
+            sw.bladePoint(0.5 + 0.5 * Math.random(), _blade);
+            // And back along the path it swept, which fills the frame gap.
+            const f = (i + Math.random()) / n;
+            sp.emit(
+                _blade.x + bx * f + (Math.random() - 0.5) * 0.06,
+                _blade.y + by * f + (Math.random() - 0.5) * 0.06,
+                _blade.z + bz * f + (Math.random() - 0.5) * 0.06,
+                // Almost no velocity of their own: these mark where the edge was,
+                // and grains that fly read as spray rather than as a trail.
+                (Math.random() - 0.5) * 0.5 + ch.velocity.x * 0.2,
+                0.12 + Math.random() * 0.30,
+                (Math.random() - 0.5) * 0.5 + ch.velocity.z * 0.2,
+                (0.015 + Math.random() * 0.024) * (0.85 + 0.6 * speedK),
+                (0.34 + Math.random() * 0.36) * (0.85 + 0.5 * speedK),
+                0,
+                // Hang, rather than settle. The default drag is tuned for powder
+                // falling out of the air; this wants to sit still and fade.
+                8.0
             );
         }
     }

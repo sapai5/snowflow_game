@@ -170,12 +170,650 @@
     }
 
     #hint.show { opacity: 1; }
+
+    /* -------------------------------------------------------- crosshair */
+
+    /* Shown only while the pointer is locked — it is an aiming reticle, and
+       there is nothing to aim while the cursor is free.
+
+       Four ticks around a gap, a dot in the middle and a faint ring: the gap is
+       what keeps the reticle off the thing being aimed at, and the ring is what
+       makes it read as an instrument rather than as a stray "+" drawn on the
+       screen. `--gap` is driven from the character's speed, so the reticle
+       breathes open when moving — the oldest trick in the third-person camera
+       book, and still the clearest feedback there is that a shot would be
+       loose. */
+
+    #crosshair {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        z-index: 40;
+        width: 36px;
+        height: 36px;
+        margin: -18px 0 0 -18px;
+        --gap: 5px;
+        color: rgba(232, 242, 252, 0.9);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 200ms ease;
+    }
+
+    #crosshair.show { opacity: 1; }
+
+    /* The hitmarker. `--hit` runs 0..1 and is written by the crosshair module only
+       while a marker is up; everything about how it looks is here.
+
+       Four ticks that kick outward, brighten and rotate. The rotation is what
+       distinguishes it from the speed spread — the reticle already opens when you
+       move, so a marker that only opened would be ambiguous. */
+    #crosshair { --hit: 0; }
+
+    #crosshair i {
+        transform: rotate(calc(var(--hit) * 45deg));
+        transform-origin: 50% 50%;
+    }
+
+    #crosshair.show i {
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.85),
+                    0 0 calc(var(--hit) * 8px) rgba(190, 235, 255, var(--hit));
+    }
+
+    #crosshair::before {
+        content: "";
+        position: absolute;
+        inset: calc(6px - var(--hit) * 6px);
+        border: 1px solid rgba(210, 240, 255, calc(var(--hit) * 0.95));
+        border-radius: 50%;
+        opacity: var(--hit);
+        pointer-events: none;
+    }
+
+    #crosshair .ring {
+        position: absolute;
+        inset: 10px;
+        border: 1px solid rgba(226, 238, 250, 0.26);
+        border-radius: 50%;
+        box-shadow: 0 0 6px rgba(0, 0, 0, 0.45);
+    }
+
+    #crosshair i {
+        position: absolute;
+        background: currentColor;
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.85);
+    }
+
+    #crosshair i.t,
+    #crosshair i.b {
+        left: 50%;
+        width: 1px;
+        height: 6px;
+        margin-left: -0.5px;
+    }
+
+    #crosshair i.t { top: calc(50% - var(--gap) - 6px); }
+    #crosshair i.b { top: calc(50% + var(--gap)); }
+
+    #crosshair i.l,
+    #crosshair i.r {
+        top: 50%;
+        height: 1px;
+        width: 6px;
+        margin-top: -0.5px;
+    }
+
+    #crosshair i.l { left: calc(50% - var(--gap) - 6px); }
+    #crosshair i.r { left: calc(50% + var(--gap)); }
+
+    #crosshair::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 2px;
+        height: 2px;
+        margin: -1px 0 0 -1px;
+        border-radius: 50%;
+        background: currentColor;
+        box-shadow: 0 0 6px rgba(0, 0, 0, 0.75);
+    }
+
+    /* ------------------------------------------------------ nameplates */
+
+    /* World-space labels, projected on the CPU and moved with a transform.
+
+       Below the crosshair in z on purpose: the reticle is the one element that
+       must never be occluded, and a plate drifting through screen centre would
+       otherwise sit on top of it.
+
+       `contain` is the reason this is a wrapper element rather than plates
+       parented straight to the body. Every plate's transform is rewritten on
+       most frames, and without a containment boundary each write invalidates
+       layout for the whole document — including the settings overlay, which is
+       the single most expensive subtree on the page to lay out. */
+
+    #plates {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        contain: layout style;
+        pointer-events: none;
+    }
+
+    /* Positioned by transform only — never by `left`/`top`, which are layout
+       properties and would put a projected 90 Hz update on the layout path
+       instead of the compositor. The trailing `translate(-50%, -100%)` runs
+       inside the scaled frame, so it centres the plate on the head and lifts it
+       by its own *visual* height at any distance scale.
+
+       `transform-origin: 0 0` is load-bearing, not tidiness: the whole transform
+       list is applied about the origin, so the default 50% 50% would fold half
+       the element's width back into the translation and put every plate half a
+       name off to the right. */
+
+    #plates .plate {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: 0 0;
+        white-space: nowrap;
+        text-align: center;
+        opacity: 0;
+        will-change: transform, opacity;
+    }
+
+    #plates .nm {
+        display: block;
+        font-size: 10px;
+        font-weight: 400;
+        letter-spacing: 0.2em;
+        text-indent: 0.2em; /* re-centre against the trailing track */
+        text-transform: uppercase;
+        color: rgba(219, 230, 242, 0.86);
+        text-shadow: 0 1px 10px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.6);
+    }
+
+    /* 2px, not 4: at 40 m this bar is three pixels wide on screen and any more
+       weight than a hairline reads as a health bar from a mobile game. */
+    #plates .hb {
+        display: block;
+        width: 76px;
+        height: 2px;
+        margin: 4px auto 0;
+        background: rgba(219, 230, 242, 0.12);
+        box-shadow: 0 0 6px rgba(0, 0, 0, 0.65);
+    }
+
+    #plates .hb b {
+        display: block;
+        width: 100%;
+        height: 100%;
+        transform-origin: 0 50%;
+        background: rgba(226, 238, 250, 0.8);
+    }
+
+    #plates .plate.hurt .hb b { background: #a4544e; }
+
+    /* ------------------------------------------------------------- hud */
+
+    #hud {
+        position: fixed;
+        left: 26px;
+        bottom: 24px;
+        z-index: 45;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 600ms ease;
+    }
+
+    #hud.show { opacity: 1; }
+
+    #hud .cap {
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+        font-size: 9px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: rgba(219, 230, 242, 0.38);
+        text-shadow: 0 1px 10px rgba(0, 0, 0, 0.85);
+    }
+
+    #hud .cap em {
+        font-style: normal;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        font-variant-numeric: tabular-nums;
+        color: rgba(219, 230, 242, 0.82);
+    }
+
+    /* The frame is a 1px rule with the fill inside it, so an empty bar is still
+       a visible instrument. A bar that vanishes at zero health reads as a bug. */
+    #hud .hp {
+        position: relative;
+        margin-top: 7px;
+        width: 208px;
+        height: 5px;
+        background: rgba(7, 11, 18, 0.55);
+        border: 1px solid rgba(143, 196, 232, 0.18);
+    }
+
+    #hud .hp i {
+        position: absolute;
+        inset: 0;
+        transform-origin: 0 50%;
+        background: linear-gradient(90deg, rgba(143, 196, 232, 0.5), #e8f2fc);
+        box-shadow: 0 0 10px rgba(143, 196, 232, 0.3);
+    }
+
+    /* One warning state, not a gradient through amber: two colours can be told
+       apart at a glance mid-fight, three cannot. */
+    #hud .hp.crit i {
+        background: linear-gradient(90deg, rgba(126, 52, 47, 0.65), #b4564e);
+        box-shadow: 0 0 10px rgba(164, 84, 78, 0.28);
+    }
+
+    #hud .pips {
+        display: flex;
+        gap: 6px;
+        margin-top: 12px;
+    }
+
+    #hud .pip {
+        position: relative;
+        width: 27px;
+        height: 30px;
+        overflow: hidden; /* clips the fill; the seconds sit inside, not below */
+        background: rgba(7, 11, 18, 0.5);
+        border: 1px solid rgba(143, 196, 232, 0.15);
+    }
+
+    /* Linear fill rising from the floor rather than a conic sweep: a conic
+       gradient is a repaint of the whole pip every frame, while a scaleY stays
+       on the compositor. It also reads as a gauge, which is the point. */
+    #hud .pip .fill {
+        position: absolute;
+        inset: 0;
+        transform-origin: 50% 100%;
+        transform: scaleY(0);
+        background: rgba(143, 196, 232, 0.15);
+    }
+
+    #hud .pip .k {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 5px;
+        font-size: 10px;
+        letter-spacing: 0.02em;
+        font-variant-numeric: tabular-nums;
+        color: rgba(219, 230, 242, 0.3);
+        text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+    }
+
+    #hud .pip .s {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 4px;
+        font-size: 8px;
+        letter-spacing: 0.06em;
+        font-variant-numeric: tabular-nums;
+        color: rgba(219, 230, 242, 0.46);
+        text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+    }
+
+    #hud .pip.ready {
+        background: rgba(143, 196, 232, 0.09);
+        border-color: rgba(143, 196, 232, 0.46);
+    }
+
+    #hud .pip.ready .k { color: #eaf4ff; }
+
+    /* ---------------------------------------------------- damage / blind */
+
+    /* Edges only. The transparent core is 44% of the radius, which is wider than
+       it sounds — it clears the reticle and both hands at every zoom the rig
+       allows. A full-screen red wash was the first attempt and it made the game
+       unplayable at exactly the moment the player needed to see. */
+    #hud-damage {
+        position: fixed;
+        inset: 0;
+        z-index: 35;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(108% 80% at 50% 50%,
+            rgba(122, 36, 32, 0) 44%,
+            rgba(118, 34, 30, 0.3) 76%,
+            rgba(92, 22, 20, 0.72) 100%);
+    }
+
+    /* White, not black: this is a snowball to the face, and a dark screen reads
+       as unconsciousness. Above the hud so the readouts go with it — being
+       blinded that you can still read your cooldowns through is not blindness.
+       Capped below opaque in JS, never here, so the cap is one number. */
+    /* Damage numbers.
+
+       One rule: what I deal is white, what I take is red. Colour carries *whose* it is
+       and nothing else — source and severity are carried by size instead, so the two
+       axes never compete. An earlier pass tinted the finisher gold and spells blue,
+       which meant colour was answering three questions at once and none of them was
+       the one that matters mid-fight.
+
+       No stroke: the shadow does that work against bright snow and costs nothing. */
+
+    #plates .dmg {
+        position: absolute;
+        left: 0;
+        top: 0;
+        z-index: 31;
+        font-size: 15px;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        color: #ffffff;
+        text-shadow: 0 1px 3px rgba(6, 12, 22, 0.95), 0 0 10px rgba(10, 20, 34, 0.75);
+        opacity: 0;
+        pointer-events: none;
+        will-change: transform, opacity;
+    }
+
+    /* The finisher: larger, still white. Size says how hard, colour says whose. */
+    #plates .dmg.heavy {
+        font-size: 23px;
+        font-weight: 600;
+        text-shadow: 0 1px 4px rgba(6, 12, 22, 0.95), 0 0 14px rgba(255, 255, 255, 0.35);
+    }
+
+    /* Damage taken. Unambiguously red, and bright enough to be read as a warning
+       rather than as a dark number that happens to be warm. */
+    #plates .dmg.taken {
+        color: #ff4a3d;
+        text-shadow: 0 1px 3px rgba(18, 2, 2, 0.95), 0 0 12px rgba(255, 40, 30, 0.45);
+    }
+
+    /* A spell hit is a size down from a sword hit — a full-size number for every tick
+       of an area effect drowns out the melee numbers that need reading. */
+    #plates .dmg.spell {
+        font-size: 13px;
+    }
+
+    /* A crystal field tick: smaller again, and slightly transparent. Merged ticks mean
+       one climbing number rather than six a second, but it still must not dominate. */
+    #plates .dmg.burn {
+        font-size: 12px;
+        opacity: 0.9;
+    }
+
+    /* A parry is not damage, so it is outside the white/red rule entirely — gold, and
+       lettered rather than numbered, because there is no amount to report. */
+    #plates .dmg.parry {
+        color: #ffd98a;
+        font-size: 13px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        text-shadow: 0 1px 3px rgba(20, 12, 2, 0.95), 0 0 12px rgba(255, 190, 80, 0.5);
+    }
+
+    /* ---------------------------------------------------------------- session UI
+
+       Kill feed, scoreboard, connection state and the share link. All bottom-left or
+       top-right, away from the reticle and away from the nameplates, because the middle
+       of the screen is where the fight is. */
+
+    #feed {
+        position: fixed;
+        left: 18px;
+        bottom: 96px;
+        z-index: 34;
+        display: flex;
+        flex-direction: column-reverse;
+        gap: 3px;
+        pointer-events: none;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+    }
+
+    #feed .feed-line {
+        color: var(--frost-dim);
+        text-shadow: 0 1px 3px rgba(6, 12, 22, 0.9);
+        opacity: 0;
+        white-space: nowrap;
+        will-change: opacity;
+    }
+
+    /* A line the local player is in. Everything else in the feed is other people's
+       business; this is the one worth finding at a glance. */
+    #feed .feed-line.mine {
+        color: #ffffff;
+    }
+
+    #net-status {
+        position: fixed;
+        right: 18px;
+        top: 14px;
+        z-index: 34;
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--frost-dim);
+        text-shadow: 0 1px 3px rgba(6, 12, 22, 0.9);
+        opacity: 0;
+        transition: opacity 180ms ease;
+        pointer-events: none;
+    }
+    #net-status.show { opacity: 0.85; }
+
+    #share-link {
+        position: fixed;
+        left: 18px;
+        bottom: 18px;
+        z-index: 34;
+        max-width: 46vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+        letter-spacing: 0.02em;
+        color: var(--frost-dim);
+        background: rgba(8, 14, 24, 0.55);
+        border: 1px solid rgba(150, 185, 220, 0.18);
+        border-radius: 4px;
+        padding: 5px 8px;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 180ms ease, color 180ms ease, border-color 180ms ease;
+    }
+    #share-link.show { opacity: 0.7; }
+    #share-link:hover { opacity: 1; color: var(--frost); }
+    #share-link.copied {
+        color: #bfe6ff;
+        border-color: rgba(150, 220, 255, 0.5);
+    }
+
+    #score {
+        position: fixed;
+        right: 18px;
+        top: 40px;
+        z-index: 34;
+        min-width: 190px;
+        padding: 8px 10px;
+        border-radius: 5px;
+        background: rgba(8, 14, 24, 0.62);
+        border: 1px solid rgba(150, 185, 220, 0.16);
+        font-size: 12px;
+        pointer-events: none;
+        /* Collapsed to the hint by default: four rows of table is a lot of screen to
+           spend on something that changes once a minute. */
+        opacity: 0;
+        transform: translateY(-4px);
+        transition: opacity 140ms ease, transform 140ms ease;
+    }
+    #score.open {
+        opacity: 1;
+        transform: none;
+    }
+
+    #score-head,
+    #score .score-row {
+        display: grid;
+        grid-template-columns: 1fr 26px 26px;
+        gap: 6px;
+        align-items: baseline;
+    }
+
+    #score-head {
+        color: var(--frost-dim);
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        padding-bottom: 4px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid rgba(150, 185, 220, 0.14);
+    }
+
+    #score .score-row {
+        color: var(--frost);
+        padding: 1px 0;
+    }
+    /* Your own row. The scoreboard's only job when you glance at it mid-fight is to
+       answer "where am I", so that row has to be findable without reading. */
+    #score .score-row.me { color: #ffffff; font-weight: 600; }
+
+    #score .score-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    #score .score-k,
+    #score .score-d {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+    #score .score-d { color: var(--frost-dim); }
+
+    #score-hint {
+        margin-top: 6px;
+        padding-top: 5px;
+        border-top: 1px solid rgba(150, 185, 220, 0.12);
+        color: var(--frost-dim);
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+    }
+
+    #hud-blind {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(118% 96% at 50% 46%,
+            #ffffff 0%,
+            #eff6fe 40%,
+            rgba(216, 231, 247, 0.94) 76%,
+            rgba(192, 213, 236, 0.88) 100%);
+    }
+
+    /* -------------------------------------------------------- death */
+
+    #hud-dead {
+        position: fixed;
+        inset: 0;
+        z-index: 62;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 420ms ease;
+        background: radial-gradient(92% 72% at 50% 50%,
+            rgba(7, 11, 18, 0.34), rgba(7, 11, 18, 0.8));
+    }
+
+    #hud-dead.show { opacity: 1; }
+
+    #hud-dead > div { text-align: center; }
+
+    #hud-dead .t {
+        font-size: 12px;
+        font-weight: 200;
+        letter-spacing: 0.52em;
+        text-indent: 0.52em;
+        text-transform: uppercase;
+        color: rgba(219, 230, 242, 0.92);
+        text-shadow: 0 1px 18px rgba(0, 0, 0, 0.9);
+    }
+
+    #hud-dead .c {
+        margin-top: 1.7em;
+        font-size: 10px;
+        letter-spacing: 0.26em;
+        text-indent: 0.26em;
+        text-transform: uppercase;
+        color: var(--frost-dim);
+        font-variant-numeric: tabular-nums;
+    }
 </style>
 </head>
 <body>
     <canvas id="view" tabindex="0"></canvas>
 
-    <div id="hint">click to look &nbsp;·&nbsp; wasd to move &nbsp;·&nbsp; f1 for settings</div>
+    <div id="crosshair" aria-hidden="true">
+        <span class="ring"></span>
+        <i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i>
+    </div>
+
+    <div id="hint">click to look &nbsp;·&nbsp; wasd to move &nbsp;·&nbsp; lmb slash · chain for the finisher &nbsp;·&nbsp; space to jump (twice to flip) &nbsp;·&nbsp; f1 for settings</div>
+
+    <!-- Combat hud. Every element that carries live state exists here up front
+         and is mutated in place by src/ui/hud.js; only the nameplates are built
+         at runtime, because there is one per player and the roster is data.
+
+         The five pips are written out rather than looped in JS so the spell slots
+         are greppable from the markup, and so a broken build still shows the
+         shape of the hud instead of nothing. -->
+
+    <div id="plates" aria-hidden="true"></div>
+
+    <!-- Kill feed, net status and the share link. Outside #hud because they are about
+         the session rather than about the fight, and they should survive a dead
+         player's HUD being hidden. -->
+    <div id="feed" aria-hidden="true"></div>
+    <div id="net-status" aria-hidden="true"></div>
+    <div id="share-link" title="click to copy" aria-hidden="true"></div>
+
+    <!-- Scoreboard. Always mounted; `.open` reveals the table. Kept in the DOM rather
+         than built on demand so opening it mid-fight costs no layout. -->
+    <div id="score" aria-hidden="true">
+      <div id="score-head">
+        <span class="score-name">player</span>
+        <span class="score-k">k</span>
+        <span class="score-d">d</span>
+      </div>
+      <div id="score-rows"></div>
+      <div id="score-hint">hold TAB</div>
+    </div>
+
+    <div id="hud" aria-hidden="true">
+        <div class="cap">vitals <em id="hud-hp-num">100</em></div>
+        <div class="hp" id="hud-hp"><i id="hud-hp-fill"></i></div>
+        <div class="pips" id="hud-pips">
+            <div class="pip"><i class="fill"></i><span class="k">1</span><span class="s"></span></div>
+            <div class="pip"><i class="fill"></i><span class="k">2</span><span class="s"></span></div>
+            <div class="pip"><i class="fill"></i><span class="k">3</span><span class="s"></span></div>
+            <div class="pip"><i class="fill"></i><span class="k">4</span><span class="s"></span></div>
+            <div class="pip"><i class="fill"></i><span class="k">5</span><span class="s"></span></div>
+        </div>
+    </div>
+
+    <div id="hud-damage" aria-hidden="true"></div>
+    <div id="hud-blind" aria-hidden="true"></div>
+
+    <div id="hud-dead" aria-hidden="true">
+        <div>
+            <div class="t">down</div>
+            <div class="c">respawn in <span id="hud-respawn">0</span>s</div>
+        </div>
+    </div>
 
     <div id="boot">
         <div class="boot-inner">

@@ -23,9 +23,9 @@
  * a weld. Anything time-based in a system that also has to survive a frame-rate
  * change has to be written as a rate.
  *
- * Wind is *apparent* wind — the field wind minus the character's own velocity —
- * with quadratic drag, so the robe whips back hard during a snow-surf run
- * without needing a special case for it.
+ * Wind is *apparent* wind — the field wind minus a fraction of the character's
+ * own velocity — with quadratic drag, so the robe whips back hard during a
+ * snow-surf run without needing a special case for it.
  *
  * Allocation: none per frame. All state is typed arrays sized at construction.
  */
@@ -331,6 +331,27 @@ export function makePanels() {
 /** Constraint relaxation iterations. Six is where the robe stops looking rubbery. */
 const ITERATIONS = 6;
 
+/**
+ * Iterations per detail tier, and whether the tier solves at all.
+ *
+ * The robe is the single most expensive thing about a character — 1728 particles,
+ * six relaxation passes, on the CPU — so it is the first thing a distant character
+ * should stop paying for. Two iterations still hangs and still swings; it is only
+ * stretchier under load, which at ten metres nobody can see. Beyond thirty metres
+ * the garment is a few pixels wide and it simply follows the hips.
+ */
+const LOD_ITERATIONS = [ITERATIONS, 2, 0];
+
+/**
+ * How much of the character's own velocity counts as wind on the garment.
+ *
+ * Not 1. A robe hanging off a moving body is inside that body's boundary layer
+ * for most of its area — the air it sees is already partly moving with it — and
+ * treating a jog as a 5 m/s headwind is what made the back panel look like it was
+ * being flown as a kite at every speed above a walk.
+ */
+const SELF_WIND = 0.55;
+
 /** Capsule table: [boneA, boneB, radius, mask]. Rebuilt from joints each frame. */
 const CAPSULES = [
     [B_ROOT, B_NECK, 0.175, C_TORSO],
@@ -352,9 +373,37 @@ export class ClothSolver {
     constructor(panels, terrain) {
         this.panels = panels;
         this.terrain = terrain;
+        /** Detail tier: 0 full, 1 reduced, 2 kinematic. See `LOD_ITERATIONS`. */
+        this.lod = 0;
         this._wind = new Float32Array(3);
         this._acc = new Float32Array(3);
         this._t = 0;
+
+        /**
+         * One extra capsule, for the sword.
+         *
+         * The blade is not a bone, so it cannot live in `CAPSULES` — its ends are
+         * pushed in from outside each frame, one frame stale because the sword is
+         * posed after the cloth solves. A frame of staleness on a walking carry is
+         * a millimetre; during a swing the robe is flying off the body anyway.
+         * (ax, ay, az, bx, by, bz, radius.)
+         */
+        this._sword = new Float32Array(7);
+        this._swordOn = false;
+    }
+
+    /**
+     * Feed the sword's collision capsule for the next solve.
+     * @param {number} ax @param {number} ay @param {number} az one end, world
+     * @param {number} bx @param {number} by @param {number} bz other end
+     * @param {number} r radius, metres
+     */
+    setSwordCapsule(ax, ay, az, bx, by, bz, r) {
+        const s = this._sword;
+        s[0] = ax; s[1] = ay; s[2] = az;
+        s[3] = bx; s[4] = by; s[5] = bz;
+        s[6] = r;
+        this._swordOn = true;
     }
 
     /**
@@ -376,9 +425,13 @@ export class ClothSolver {
         const ws = 3.2 * S.windStrength;
         // Gusts, so a standing figure's robe is never dead still.
         const gust = 1 + 0.35 * Math.sin(this._t * 0.7) + 0.18 * Math.sin(this._t * 2.3 + 1.1);
-        this._wind[0] = Math.sin(a) * ws * gust - ch.velocity.x;
+        // Only part of the character's own speed reaches the garment. A robe on a
+        // moving body sits in that body's wake — it is sheltered, not held out in
+        // a wind tunnel — and taking the velocity at full strength was what made
+        // a jog look like a gale.
+        this._wind[0] = Math.sin(a) * ws * gust - ch.velocity.x * SELF_WIND;
         this._wind[1] = 0.35 * Math.sin(this._t * 1.9);
-        this._wind[2] = Math.cos(a) * ws * gust - ch.velocity.z;
+        this._wind[2] = Math.cos(a) * ws * gust - ch.velocity.z * SELF_WIND;
 
         for (let s = 0; s < steps; s++) {
             for (let i = 0; i < this.panels.length; i++) {
@@ -406,12 +459,19 @@ export class ClothSolver {
 
         // ---- integrate ----------------------------------------------------
         // Quadratic drag against the apparent wind. At walking pace this is a
-        // fraction of gravity; at nineteen metres a second it is four times it,
+        // fraction of gravity; at nineteen metres a second it still exceeds it,
         // which is what lays the robe out flat behind a surf run with no special
-        // case anywhere.
+        // case anywhere — but the coefficient is deliberately low enough that a
+        // run is a run. A garment whose response to five metres a second is
+        // indistinguishable from its response to twenty tells the player nothing.
         const wx = this._wind[0], wy = this._wind[1], wz = this._wind[2];
         const wmag = Math.hypot(wx, wy, wz);
-        const drag = 0.085 * wmag;
+        const drag = 0.062 * wmag;
+        // Turbulence is capped, and it is the cap that matters: it is a per-node
+        // high-frequency term, so left proportional to drag it turns into a
+        // buzzing flutter the moment the character moves, at a frequency that has
+        // nothing to do with how fast they are going.
+        const turb = Math.min(drag, 0.30) * 0.25;
         const damp = Math.pow(0.90, h * 60);
         const h2 = h * h;
 
@@ -420,14 +480,14 @@ export class ClothSolver {
             const o = k * 3;
             // Turbulence, hashed off the particle index so it does not pulse in
             // unison across the garment.
-            const ph = k * 1.7 + this._t * 4.5;
+            const ph = k * 1.7 + this._t * 2.6;
             const tx = Math.sin(ph) * 0.9;
             const ty = Math.sin(ph * 1.31 + 2.1) * 0.7;
             const tz = Math.cos(ph * 0.87 + 0.4) * 0.9;
 
-            const ax = wx * drag + tx * drag * 0.25;
-            const ay = wy * drag - 9.81 + ty * drag * 0.25;
-            const az = wz * drag + tz * drag * 0.25;
+            const ax = wx * drag + tx * turb;
+            const ay = wy * drag - 9.81 + ty * turb;
+            const az = wz * drag + tz * turb;
 
             const vx = (pos[o] - prev[o]) * damp;
             const vy = (pos[o + 1] - prev[o + 1]) * damp;
@@ -440,15 +500,37 @@ export class ClothSolver {
         }
 
         // ---- constraints ---------------------------------------------------
-        for (let it = 0; it < ITERATIONS; it++) {
-            this._anchors(p, h);
+        const iterations = LOD_ITERATIONS[this.lod] || 0;
+        if (iterations === 0) {
+            // Kinematic: the garment is pinned straight onto the skinned targets and
+            // never simulated. It still moves with the body and still hangs in the
+            // right place; it just has no dynamics of its own.
+            this._kinematic(p);
+            return;
+        }
+        for (let it = 0; it < iterations; it++) {
+            this._anchors(p, h, iterations);
             this._distance(p, it);
         }
         this._collide(p, fig);
     }
 
+    /** Snap every particle onto its target. The cheapest possible garment. */
+    _kinematic(p) {
+        const n = p.count;
+        const pos = p.pos;
+        const prev = p.prev;
+        const target = p.target;
+        for (let k = 0; k < n * 3; k++) {
+            pos[k] = target[k];
+            // Velocity has to be cleared too, or the frame this tier is left the
+            // garment explodes with whatever Verlet velocity it had accumulated.
+            prev[k] = target[k];
+        }
+    }
+
     /** Pull each particle toward its skinned target at its own rate. */
-    _anchors(p, h) {
+    _anchors(p, h, iterations) {
         const n = p.count;
         const pos = p.pos;
         const target = p.target;
@@ -463,8 +545,9 @@ export class ClothSolver {
             }
             if (rate <= 0) continue;
             // Divided by the iteration count so the total pull over one frame is
-            // the rate the table asks for, not six times it.
-            const w = (1 - Math.exp(-rate * h)) / ITERATIONS;
+            // the rate the table asks for, not once per iteration — which also
+            // keeps a reduced-iteration tier pulling as hard as a full one.
+            const w = (1 - Math.exp(-rate * h)) / iterations;
             pos[o] += (target[o] - pos[o]) * w;
             pos[o + 1] += (target[o + 1] - pos[o + 1]) * w;
             pos[o + 2] += (target[o + 2] - pos[o + 2]) * w;
@@ -481,7 +564,7 @@ export class ClothSolver {
         const { cols, rows, pos, restU, restV, restB, pinRate } = p;
         // Bending is solved softly and only on the later iterations. Solved hard
         // it fights the distance constraints and the garment goes stiff.
-        const bendK = iteration >= ITERATIONS - 3 ? 0.22 : 0;
+        const bendK = iteration >= (LOD_ITERATIONS[this.lod] || 1) - 3 ? 0.22 : 0;
 
         for (let j = 0; j < rows; j++) {
             for (let i = 0; i < cols; i++) {
@@ -511,26 +594,16 @@ export class ClothSolver {
             const cap = CAPSULES[c];
             if ((p.collide & cap[3]) === 0) continue;
             const a = cap[0] * 3, b = cap[1] * 3;
-            const ax = joint[a], ay = joint[a + 1], az = joint[a + 2];
-            const bx = joint[b], by = joint[b + 1], bz = joint[b + 2];
-            const ex = bx - ax, ey = by - ay, ez = bz - az;
-            const elen2 = ex * ex + ey * ey + ez * ez || 1e-6;
-            const r = cap[2];
+            this._capsulePush(p, joint[a], joint[a + 1], joint[a + 2],
+                joint[b], joint[b + 1], joint[b + 2], cap[2]);
+        }
 
-            for (let k = 0; k < n; k++) {
-                if (!isFinite(p.pinRate[k])) continue;
-                const o = k * 3;
-                let t = ((pos[o] - ax) * ex + (pos[o + 1] - ay) * ey + (pos[o + 2] - az) * ez) / elen2;
-                t = t < 0 ? 0 : t > 1 ? 1 : t;
-                const cx = ax + ex * t, cy = ay + ey * t, cz = az + ez * t;
-                let dx = pos[o] - cx, dy = pos[o + 1] - cy, dz = pos[o + 2] - cz;
-                const d = Math.hypot(dx, dy, dz);
-                if (d >= r || d < 1e-6) continue;
-                const push = (r - d) / d;
-                pos[o] += dx * push;
-                pos[o + 1] += dy * push;
-                pos[o + 2] += dz * push;
-            }
+        // The sword, against every panel. The robe drapes over the hilt where it
+        // hangs at the hip, which is the visible contact; the rest of the blade
+        // just keeps the hem from slicing through it during a turn.
+        if (this._swordOn) {
+            const s = this._sword;
+            this._capsulePush(p, s[0], s[1], s[2], s[3], s[4], s[5], s[6]);
         }
 
         // The hem rides on the snow rather than through it. Only the bottom rows
@@ -543,6 +616,29 @@ export class ClothSolver {
                 const g = this.terrain.heightAt(pos[o], pos[o + 2]) + 0.012;
                 if (pos[o + 1] < g) pos[o + 1] = g;
             }
+        }
+    }
+
+    /** Push one panel's particles out of one capsule. */
+    _capsulePush(p, ax, ay, az, bx, by, bz, r) {
+        const n = p.count;
+        const pos = p.pos;
+        const ex = bx - ax, ey = by - ay, ez = bz - az;
+        const elen2 = ex * ex + ey * ey + ez * ez || 1e-6;
+
+        for (let k = 0; k < n; k++) {
+            if (!isFinite(p.pinRate[k])) continue;
+            const o = k * 3;
+            let t = ((pos[o] - ax) * ex + (pos[o + 1] - ay) * ey + (pos[o + 2] - az) * ez) / elen2;
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            const cx = ax + ex * t, cy = ay + ey * t, cz = az + ez * t;
+            let dx = pos[o] - cx, dy = pos[o + 1] - cy, dz = pos[o + 2] - cz;
+            const d = Math.hypot(dx, dy, dz);
+            if (d >= r || d < 1e-6) continue;
+            const push = (r - d) / d;
+            pos[o] += dx * push;
+            pos[o + 1] += dy * push;
+            pos[o + 2] += dz * push;
         }
     }
 }

@@ -83,6 +83,19 @@ export class SpellSystem {
             lights: this.lights,
             time: 0,
             sprayScale: 1,
+            /**
+             * Whose spell this is.
+             *
+             * Null means the local player, which is the only answer the spell system
+             * needed while there was one character in the world. Now that anybody can
+             * cast, the two spells anchored to their caster — Sweep, which is born a
+             * step in front of them, and Vortex, which *follows* them for its whole
+             * life — need to know who that is. Everything else is placed at a point
+             * and does not care.
+             *
+             * @type {{ position: import("@babylonjs/core/Maths/math.vector").Vector3 }|null}
+             */
+            caster: null,
             handPosition: (which, out, off) => this._handPosition(which, out, off),
         };
 
@@ -115,6 +128,81 @@ export class SpellSystem {
         this._time = 0;
         /** Console override for the Ribbon hold. */
         this.debugRibbon = false;
+
+        /**
+         * Asked before a cast is allowed to play, and told after one does.
+         *
+         * The visual system does not own the rules — cooldowns, being staggered, being
+         * dead are all gameplay, and gameplay lives in the combat resolver. Rather than
+         * teach this file about any of that, it consults a gate and reports what it
+         * did. Set by whoever is wiring the game; left open when nobody is, so the
+         * spells still work as a standalone visual demo.
+         *
+         * @type {{ allow: (id: number) => boolean, cast: (id: number) => void }|null}
+         */
+        this.gate = null;
+
+        /**
+         * Anything outside the spell system that wants to declare a light this frame.
+         *
+         * The pool is cleared at the top of `update` and pushed to every consumer at the
+         * bottom, so a light declared outside that window is either wiped before it is
+         * seen or arrives after the materials have already been given the frame's
+         * contents. Rather than have callers guess the ordering — which is exactly the
+         * mistake that made the first impact flashes invisible — they hand a callback
+         * here and it is invoked inside the window.
+         *
+         * @type {((dt: number) => void)|null}
+         */
+        this.extraLights = null;
+    }
+
+    /**
+     * Play a spell for somebody other than the local player.
+     *
+     * The gameplay volume that actually hurts people is spawned by the combat
+     * resolver; this is only the light and the snow. Two systems for one spell is
+     * deliberate — the visuals hold shared GPU pools and cannot sensibly exist per
+     * player, while a gameplay volume must — and the volume is the one that is right
+     * if they ever disagree.
+     *
+     * `owner` is used for the whole life of Sweep and Vortex, not just the frame of
+     * the cast, because both are anchored to the caster rather than to a point.
+     *
+     * @param {number} id 1..5
+     * @param {{ position: import("@babylonjs/core/Maths/math.vector").Vector3 }} owner
+     * @param {import("@babylonjs/core/Maths/math.vector").Vector3} aim unit
+     * @param {import("@babylonjs/core/Maths/math.vector").Vector3} at where placed
+     *   spells land — ignored by Sweep and Vortex
+     * @param {number} [trauma] camera shake, 0..1. Callers scale this by distance so a
+     *   spell across the field is not felt in the hands.
+     */
+    castAs(id, owner, aim, at, trauma = 0) {
+        const prev = this.ctx.caster;
+        this.ctx.caster = owner;
+        this.aim.copyFrom(aim);
+        this._lastCast = this._time;
+
+        if (id === 1) {
+            const fl = Math.hypot(aim.x, aim.z) || 1;
+            this.sweep.trigger(aim.x / fl, aim.z / fl);
+        } else if (id === 3) {
+            this.bloom.trigger(at.x, at.y, at.z);
+        } else if (id === 4) {
+            this.crystallize.trigger(at.x, at.y, at.z);
+        } else if (id === 5) {
+            this.vortex.trigger();
+        }
+        // Spell 2 has no visual of its own here: the Snowball is a projectile, and the
+        // projectile is drawn from the live volume by `vfx/volumeFx.js` for every
+        // caster including this one. The Ribbon tether is a held cast and belongs to
+        // whoever is holding the mouse.
+
+        if (trauma > 0) this.ctx.rig.addTrauma(trauma);
+        // Restored rather than left set: Sweep and Vortex captured what they needed
+        // during `trigger`, except Vortex, which keeps reading it — so the *owner* is
+        // handed to the spell itself below.
+        this.ctx.caster = prev;
     }
 
     /**
@@ -165,6 +253,8 @@ export class SpellSystem {
         this.aim.copyFrom(this.ctx.rig.forward);
 
         this.lights.begin();
+        // Inside the window: after the clear, before the spells declare theirs.
+        if (this.extraLights) this.extraLights(dt);
 
         if (S.showSpells !== false) this._dispatch();
         else this._cancelAll();
@@ -193,12 +283,27 @@ export class SpellSystem {
     }
 
     _dispatch() {
+        const gate = this.gate;
         // Ribbon is a hold, so it is polled rather than edge-triggered.
         // `debugRibbon` lets the console hold it without synthesising a key
         // event — the poll would otherwise release it on the very next frame.
-        this.holdRibbon(input.spellHeld2 || this.debugRibbon);
+        const wantRibbon = input.spellHeld2 || this.debugRibbon;
+        // A held spell only has to pass the gate on the frame it *starts*; once it is
+        // up, holding it is not a new cast and must not be charged as one.
+        if (wantRibbon && !this.ribbon.active && gate && !gate.allow(2)) {
+            this.holdRibbon(false);
+        } else {
+            const starting = wantRibbon && !this.ribbon.active;
+            this.holdRibbon(wantRibbon);
+            if (starting && gate) gate.cast(2);
+        }
         const key = input.spellPressed;
-        if (key && key !== 2) this.cast(key);
+        if (key && key !== 2) {
+            if (!gate || gate.allow(key)) {
+                this.cast(key);
+                if (gate) gate.cast(key);
+            }
+        }
     }
 
     /**

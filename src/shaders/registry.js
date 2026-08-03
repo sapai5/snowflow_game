@@ -57,6 +57,8 @@ import waterFrag from "./water.fragment.wgsl?raw";
 import crystalVert from "./crystal.vertex.wgsl?raw";
 import crystalFrag from "./crystal.fragment.wgsl?raw";
 import crystalDepthVert from "./crystalDepth.vertex.wgsl?raw";
+import swordVert from "./sword.vertex.wgsl?raw";
+import swordFrag from "./sword.fragment.wgsl?raw";
 
 import prepassFrag from "./prepass.fragment.wgsl?raw";
 import terrainPrepassVert from "./terrainPrepass.vertex.wgsl?raw";
@@ -65,6 +67,9 @@ import clothPrepassVert from "./clothPrepass.vertex.wgsl?raw";
 import wakePrepassVert from "./wakePrepass.vertex.wgsl?raw";
 import wakePrepassFrag from "./wakePrepass.fragment.wgsl?raw";
 import crystalPrepassVert from "./crystalPrepass.vertex.wgsl?raw";
+import swordPrepassVert from "./swordPrepass.vertex.wgsl?raw";
+import trailVert from "./trail.vertex.wgsl?raw";
+import trailFrag from "./trail.fragment.wgsl?raw";
 
 
 const INCLUDES = {
@@ -120,6 +125,9 @@ const SHADERS = {
     crystalPixelShader: crystalFrag,
     crystalDepthVertexShader: crystalDepthVert,
 
+    swordVertexShader: swordVert,
+    swordPixelShader: swordFrag,
+
     // The camera-space depth prepass. One fragment stage shared by everything
     // that has nothing to discard; the wake carries its own because it does.
     prepassPixelShader: prepassFrag,
@@ -129,6 +137,10 @@ const SHADERS = {
     wakePrepassVertexShader: wakePrepassVert,
     wakePrepassPixelShader: wakePrepassFrag,
     crystalPrepassVertexShader: crystalPrepassVert,
+    swordPrepassVertexShader: swordPrepassVert,
+
+    trailVertexShader: trailVert,
+    trailPixelShader: trailFrag,
 };
 
 let registered = false;

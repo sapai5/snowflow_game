@@ -20,8 +20,12 @@ no meshes, no HDRIs and no animation data in this repository.
 | `W` `A` `S` `D` | move, relative to the camera |
 | Mouse | look · **Wheel** zoom |
 | `Shift` | sprint |
+| `Space` | jump — tap for a hop, hold for height |
+| `Space` (again, in the air) | double jump into a front somersault |
+| **Left mouse** | slash — keep clicking to chain: right, left, then the heavy finisher |
 | **Right mouse (hold)** | snow-surf — carve across the field and throw a wake |
 | `1` – `5` | the five spells (`2` is a held cast) |
+| `Tab` (hold) | scoreboard |
 | `F1` or `` ` `` | settings and performance overlay |
 
 The overlay exposes every art parameter as a live slider — sun angle, wind
@@ -109,6 +113,48 @@ alpha-tested against a hashed strand field.
 
 One small texture carries everything to the GPU: rows 0–3 are bone matrices,
 rows 4+ are simulated cloth nodes. One upload per frame, no allocation.
+
+Jumping runs on top of both locomotion modes, and keeps the mode it launched in:
+a walking jump steers and converts a run into distance, an ollie off the board
+holds its heading. Neither holds its speed — nothing drives the board in the air,
+so drag has the flight to itself, and the landing scrubs in proportion to the
+vertical speed that arrived. A second press in the air spends the one air jump on
+a front somersault, rotating the finished pose about the body's centre of mass and
+timed against the remaining flight so the figure is upright and extended before it
+lands; on the board that second jump is paid for out of forward speed, because
+there is nothing up there to push against. Nothing marks the snow while airborne;
+the touchdown stamps one wide crater and throws a radial burst of powder.
+
+The **ice sword** in the right hand is a 443-triangle CC0 asset carried by one
+rigid matrix — the hand bone's frame times a fixed grip offset — and it is two
+materials in one draw. The blade, guard wings and grip body are ice, shaded by the
+same model as the Crystallise prisms: flat facets from screen-space derivatives,
+wavelength-dependent absorption through the thickness, dispersive refraction
+against the sky LUT, and a cold light along the cutting edges with internal
+fractures picking it up from inside. The guard band and set gem
+are brushed gold — environment-lit metal with engraved rings — and the blade
+carries a gold inlay, a fuller rail and a chevron chain, engraved in the shader
+at no geometry cost. No textures, no refraction pass.
+
+The blade is swung as a fixed escalating string — no plane repeats. Click one is a
+Quick Slash, a tight 110-degree diagonal from high-left with a wind-up that barely
+passes the hip. Click two is the Return Slash, the mirror stroke: the blade is
+already low-right where the jab's overrotation left it, and it cuts back up the
+opposite diagonal, slightly wider and heavier. Click three is the Heavy Finisher —
+coiled high-left where the return ended, a hitch at the top, then the big
+descending cross-body cut with five times the drive, a stomped front foot,
+hit-stop at full extension and a held overrotated finish. Each stroke's
+follow-through is the next stroke's coil, so chaining redirects momentum instead of
+rewinding it.
+
+Neither is an animation. The combo writes a phase and three weights onto the
+controller; the figure runs that phase through a four-link spring chain — hips,
+chest, shoulders, hand, each overshooting the one before it — and slerps the hand
+along a great circle defined by two angles per end of the arc. The sword adds a
+fifth link: its direction is a spring chasing the grip, so the blade trails the
+hand into the swing, whips past it when the hand slows, and rings briefly
+afterwards. A strike whose point reaches the snow opens a narrow packed cut and
+throws a fan of powder along the edge; held high it leaves nothing.
 
 ### Snow-surf
 
@@ -240,7 +286,53 @@ npm install
 npm run dev      # vite dev server on :5173
 npm run build    # production build into dist/
 npm run preview  # serve the production build
+npm test         # 551 headless assertions, no GPU needed
 ```
+
+## Multiplayer
+
+Four players, free-for-all, join by link. The relay is a single Node process that also
+serves the built client, so one process and one URL is the whole deployment.
+
+```bash
+npm run host                 # build, then serve game + relay on :8787
+# or, while developing:
+npm run relay                # relay only, on :8787; use `npm run dev` for the client
+```
+
+Then open `http://localhost:8787/?room=SNOW-TEST`. The room code creates the room — there
+is nothing to "open" first, and whoever arrives first makes it.
+
+To let other people in, put a tunnel in front of it. Cloudflare's needs no account:
+
+```bash
+cloudflared tunnel --url http://localhost:8787
+```
+
+That prints an `https://<something>.trycloudflare.com` URL. Append the room and that is
+the shareable link:
+
+```
+https://<something>.trycloudflare.com/?room=SNOW-4KQ2
+```
+
+The game shows the link bottom-left and copies it when clicked. `?name=` sets your
+nameplate; it is remembered afterwards.
+
+The same process deploys unmodified to any free tier that supports WebSockets — Fly,
+Render, Deno Deploy — when the URL needs to stop changing.
+
+### How it is split
+
+Clients are **trusted**: this is a dev build with no anti-cheat, which buys away
+prediction, reconciliation and rollback entirely. Each client owns where it is and does
+its own hit detection. The relay owns only the facts four clients cannot be allowed to
+disagree about — health, who is dead, who got the credit, when a spell is ready, and the
+terrain seed. Snapshots are 20 Hz and remote players are drawn 100 ms behind, interpolated
+between two known positions rather than extrapolated forward from the newest one.
+
+The consequence worth knowing: **only your own client resolves your blade**. Without that
+rule all four clients claim the same hit and nine damage lands as thirty-six.
 
 ## Layout
 
@@ -260,11 +352,19 @@ src/
 
 ## Assets and licences
 
-There are no third-party assets. Every texture, environment map and piece of
-geometry in the running demo is generated at load time on the GPU: the sky is an
-atmosphere integral, the snow grain and terrain are noise, the character is
-lofted from a table of numbers, and the fabric weave and fur strands are
-evaluated in the fragment shader.
+One third-party asset: the ice sword's silhouette is **"Crystal"** from the
+[Swordtember 2022 CC0 pack](https://opengameart.org/content/30-unique-lowpoly-swords-cc0-swordtember2022)
+by *CC0 Game Assets* (public domain, no attribution required — given anyway).
+Only the geometry survives the import: it was converted offline into
+`src/character/swordMesh.js`, re-scaled into the rig's sword space, and the
+shader's own attributes were derived in place of the asset's texture, so it is
+lit by the same glacier-ice and silver material as everything else.
+
+Everything else — every texture, environment map and piece of geometry in the
+running demo — is generated at load time on the GPU: the sky is an atmosphere
+integral, the snow grain and terrain are noise, the character is lofted from a
+table of numbers, and the fabric weave and fur strands are evaluated in the
+fragment shader.
 
 Runtime dependencies are `@babylonjs/core` and `@babylonjs/materials`
 (Apache-2.0). The only build dependency is Vite (MIT), which does not ship in

@@ -321,6 +321,21 @@ export class Character {
         }
     }
 
+    /**
+     * Set the detail tier: 0 full, 1 reduced cloth and no fur, 2 kinematic cloth
+     * and no fur.
+     *
+     * The skeleton is never reduced. A character's silhouette and its gait are what
+     * read at distance and they are also the cheap part; the robe and the fur are
+     * the expensive part and are invisible first.
+     *
+     * @param {number} lod
+     */
+    setLod(lod) {
+        this.solver.lod = lod;
+        if (this._visible) this.furMesh.isVisible = lod === 0;
+    }
+
     setVisible(v) {
         this._visible = !!v;
         this.bodyMesh.isVisible = this._visible;

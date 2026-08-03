@@ -63,6 +63,16 @@ export class Vortex {
 
     trigger() {
         const ctx = this.ctx;
+        /**
+         * Whose vortex this is, held for its whole life.
+         *
+         * The column follows its caster, so unlike every placed spell it cannot read
+         * the owner once at cast time and forget. Captured here rather than read from
+         * the context each frame because the context's `caster` is only set for the
+         * duration of a cast — a second player casting in the same frame would
+         * otherwise steal this one's anchor.
+         */
+        this.owner = ctx.caster || ctx.controller;
         for (let i = 0; i < HELICES; i++) {
             if (this.strands[i] < 0) this.strands[i] = ctx.water.acquire();
         }
@@ -85,10 +95,11 @@ export class Vortex {
             return;
         }
 
-        // The column follows the player. It is *their* vortex — walking out of
-        // it would be the single most effect-like thing it could do.
-        this.x = ctx.controller.position.x;
-        this.z = ctx.controller.position.z;
+        // The column follows its caster. It is *their* vortex — walking out of it
+        // would be the single most effect-like thing it could do.
+        const owner = this.owner || ctx.controller;
+        this.x = owner.position.x;
+        this.z = owner.position.z;
 
         const env = smooth01(this.t / RAMP) * (1 - smooth01((this.t - RAMP - HOLD) / FADE));
         // Spins up and keeps spinning: the rotation does not ease out with the

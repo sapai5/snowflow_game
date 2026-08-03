@@ -1,10 +1,20 @@
 /**
- * Third-person spring-arm rig — action-MMO framing.
+ * Third-person spring-arm rig — anchored over-the-shoulder framing.
  *
- * The arm is deliberately *not* rigid: the pivot chases the character through a
- * critically-damped spring, so hard acceleration pulls the camera back and the
- * character drifts forward in frame. FOV widens with speed, the rig banks into
- * carves, and everything eases. Nothing here snaps.
+ * The arm is stiff on purpose. The character holds a fixed place in frame and
+ * the reticle at screen centre means what it points at, which is what every
+ * third-person action game does and what a soft spring cannot give you: a rig
+ * that lags the character makes the world feel like it is sliding around the
+ * player rather than the player moving through it.
+ *
+ * Two rates rather than one spring, and no overshoot in either. Horizontal is
+ * nearly rigid — 24/s is about four frames to close 90% of a gap, which reads as
+ * attached. Vertical is deliberately half that: the ground under this character
+ * is dunes, and a rig that tracks every crest rigidly bobs the whole view.
+ *
+ * FOV widens with speed and the rig banks into a carve, but both are a third of
+ * what they were when this was a free-flying showcase rig — enough to feel the
+ * speed, not enough to feel unmoored.
  *
  * Open snow field, so there is no obstacle collision solve — only the ground
  * itself pushes the arm up, which buys a rig that never pops through a drift.
@@ -28,8 +38,18 @@ const ARM_SAMPLES = 5;
 
 const PITCH_MIN = -0.62; // looking up
 const PITCH_MAX = 1.05; // looking down
-const DIST_MIN = 2.6;
-const DIST_MAX = 11.0;
+const DIST_MIN = 1.9;
+const DIST_MAX = 8.0;
+
+/**
+ * How fast the pivot closes on the character, per axis, 1/s.
+ *
+ * Horizontal is high enough to read as anchored and low enough that a frame
+ * spike does not snap the view. Vertical is much lower on purpose — see the note
+ * at the top of the file.
+ */
+const PIVOT_RATE_XZ = 24;
+const PIVOT_RATE_Y = 11;
 
 export class CameraRig {
     /**
@@ -51,16 +71,24 @@ export class CameraRig {
         this.yaw = 2.4;
         this.pitch = 0.17;
 
-        this.distance = 6.2;
-        this.distanceTarget = 6.2;
+        this.distance = 3.6;
+        this.distanceTarget = 3.6;
 
-        /** Smoothed pivot position (the thing the spring chases). */
+        /** Smoothed pivot position (the thing the arm hangs off). */
         this.pivot = new Vector3(0, 0, 0);
-        this.pivotVel = new Vector3(0, 0, 0);
 
-        /** Over-the-shoulder offset, in camera space. */
-        this.shoulder = 0.85;
-        this.pivotHeight = 1.62;
+        /**
+         * Over-the-shoulder offset, in camera space, and the height the arm
+         * pivots about.
+         *
+         * Together these are the framing: the shoulder offset is what puts the
+         * character left of centre and leaves the middle of the screen — where
+         * the reticle is — looking at what they are facing. The pivot height is
+         * chest-high on a 1.7 m figure, not eye-high, so the horizon sits where a
+         * third-person camera puts it rather than where a headcam would.
+         */
+        this.shoulder = 0.55;
+        this.pivotHeight = 1.45;
 
         this.baseFov = 1.02;
         this.fov = 1.02;
@@ -88,7 +116,7 @@ export class CameraRig {
          */
         this.groundAt = null;
         /** Metres of snow the camera must keep beneath it. */
-        this.groundClearance = 1.35;
+        this.groundClearance = 1.0;
         /** Eased lift currently being applied to stay above the surface. */
         this.groundLift = 0;
 
@@ -125,26 +153,31 @@ export class CameraRig {
         _pivot.copyFrom(targetPos);
         _pivot.y += this.pivotHeight;
 
-        // Lead the camera slightly into the direction of travel so fast motion
-        // shows more of what's ahead.
-        const lead = Math.min(1, speed01) * 1.35;
-        _pivot.x += targetVel.x * lead * 0.09;
-        _pivot.z += targetVel.z * lead * 0.09;
+        // Lead only at real speed. Leading at a walk is what made the rig feel
+        // like it was drifting: the character wandered around in frame while the
+        // player was doing nothing but strolling.
+        const lead = Math.max(0, speed01 - 0.4) * 0.9;
+        _pivot.x += targetVel.x * lead * 0.05;
+        _pivot.z += targetVel.z * lead * 0.05;
 
         if (this._first) {
             this.pivot.copyFrom(_pivot);
             this._first = false;
         } else {
-            // Softer spring under acceleration = the arm stretches, then recovers.
-            springDamp(this.pivot, this.pivotVel, _pivot, 7.5, 1.0, dt);
+            // Exponential rather than a spring, so it cannot overshoot, and split
+            // per axis so the horizontal can be stiff without the vertical
+            // tracking every dune.
+            this.pivot.x = expDamp(this.pivot.x, _pivot.x, PIVOT_RATE_XZ, dt);
+            this.pivot.z = expDamp(this.pivot.z, _pivot.z, PIVOT_RATE_XZ, dt);
+            this.pivot.y = expDamp(this.pivot.y, _pivot.y, PIVOT_RATE_Y, dt);
         }
 
         // -------------------------------------------------------------- fov
-        const fovWant = this.baseFov * (1 + speed01 * 0.19);
+        const fovWant = this.baseFov * (1 + speed01 * 0.12);
         this.fov = expDamp(this.fov, fovWant, 3.2, dt);
 
         // ------------------------------------------------------------- bank
-        this.rollTarget = -lean * 0.085;
+        this.rollTarget = -lean * 0.03;
         this.roll = expDamp(this.roll, this.rollTarget, 5.0, dt);
 
         // ------------------------------------------------------------ shake
@@ -170,7 +203,7 @@ export class CameraRig {
         _desired.copyFrom(this.pivot);
         _desired.addInPlace(_tmp.copyFrom(_fwd).scaleInPlace(-this.distance));
         _desired.addInPlace(_tmp.copyFrom(_right).scaleInPlace(this.shoulder));
-        _desired.addInPlace(_tmp.copyFrom(_up).scaleInPlace(0.22));
+        _desired.addInPlace(_tmp.copyFrom(_up).scaleInPlace(0.12));
 
         // ---- keep the arm out of the snow --------------------------------
         // The lift rises quickly and relaxes slowly: snapping down the instant a
@@ -237,11 +270,16 @@ export function expDamp(cur, target, rate, dt) {
 
 /**
  * Semi-implicit damped spring toward `target`, mutating `pos` and `vel`.
+ *
+ * Unused by the rig itself — the pivot moved to a non-overshooting exponential
+ * when the framing was anchored — and kept because a spring is the right tool
+ * the moment anything here needs to *overshoot* on purpose.
+ *
  * @param {Vector3} pos @param {Vector3} vel @param {Vector3} target
  * @param {number} freq natural frequency (rad/s-ish)
  * @param {number} damping 1 = critical
  */
-function springDamp(pos, vel, target, freq, damping, dt) {
+export function springDamp(pos, vel, target, freq, damping, dt) {
     const k = freq * freq;
     const c = 2 * damping * freq;
     // Clamp dt so a hitch can't blow the integrator up.
@@ -253,6 +291,7 @@ function springDamp(pos, vel, target, freq, damping, dt) {
     pos.y += vel.y * h;
     pos.z += vel.z * h;
 }
+
 
 /** Cheap smooth 1D value noise for shake. Deterministic, no allocation. */
 function noise1(x) {

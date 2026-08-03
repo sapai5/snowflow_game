@@ -413,7 +413,10 @@ export class Overlay {
             this._txt(
                 r.chrMot,
                 c.speed.toFixed(2) + " m/s  " + wrapDeg(c.facing * RAD).toFixed(0) + "°" +
-                (c.surf > 0.01 ? "  surf " + c.surf.toFixed(2) : "")
+                (c.surf > 0.01 ? "  surf " + c.surf.toFixed(2) : "") +
+                (c.airborne ? "  air " + c.airHeight.toFixed(2) + " m" : "") +
+                (c.plow > 0.01 ? "  plow " + c.plow.toFixed(2) : "") +
+                (c.flipAngle > 0.01 ? "  flip " + (c.flip * 100).toFixed(0) + "%" : "")
             );
         } else {
             this._txt(r.chrPos, "—");

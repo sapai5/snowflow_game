@@ -189,7 +189,9 @@ export class Ribbon {
 
     _seed() {
         const ctx = this.ctx;
-        ctx.handPosition(1, _tan, 0);
+        // The off hand. Spells are the left arm's job — the right one is holding a
+        // sword and is busy swinging it.
+        ctx.handPosition(0, _tan, 0);
         this.tipX = _tan[0];
         this.tipY = _tan[1];
         this.tipZ = _tan[2];
@@ -247,7 +249,7 @@ export class Ribbon {
         const rig = ctx.rig;
         const h = Math.min(dt, 1 / 60);
 
-        ctx.handPosition(1, _tan, 0);
+        ctx.handPosition(0, _tan, 0);
         const hx = _tan[0], hy = _tan[1], hz = _tan[2];
 
         this._phase += dt * 2.55;

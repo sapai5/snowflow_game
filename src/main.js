@@ -20,13 +20,21 @@ import {
 } from "./core/perf.js";
 import { initInput, pollInput, endFrame, input } from "./core/input.js";
 import { CameraRig } from "./core/camera.js";
-import { CharacterController } from "./character/controller.js";
-import { Character } from "./character/character.js";
-import { SnowContact } from "./character/snowContact.js";
+import { World } from "./game/world.js";
+import { SPELLS } from "./game/combat.js";
 import { SprayField } from "./vfx/particles.js";
 import { SurfWake } from "./vfx/surfWake.js";
+import { VolumeFx } from "./vfx/volumeFx.js";
+import { ImpactFx } from "./vfx/impactFx.js";
+import { Scoreboard } from "./ui/scoreboard.js";
+import { NetClient, roomFromUrl, shareLink } from "./net/client.js";
+import { makeRoomCode } from "./net/protocol.js";
+import { Audio } from "./audio/audio.js";
 import { SpellSystem } from "./spells/spellSystem.js";
 import { Overlay } from "./ui/overlay.js";
+import { DummyCrowd } from "./dev/dummies.js";
+import { Crosshair } from "./ui/crosshair.js";
+import { Hud } from "./ui/hud.js";
 import { Sky } from "./render/sky.js";
 import { ShadowSystem } from "./render/shadows.js";
 import { Terrain } from "./terrain/terrain.js";
@@ -37,6 +45,7 @@ import * as loading from "./core/loading.js";
 
 // ------------------------------------------------------- module-scope scratch
 const _vel = new Vector3();
+const _handOut = new Float32Array(3);
 
 async function boot() {
     const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById("view"));
@@ -124,20 +133,37 @@ async function boot() {
 
     await loading.phase("placing character", 0.62);
 
-    const character = new CharacterController(terrain);
-    character.position.set(0, 0, 0);
-    character.position.y = terrain.heightAt(0, 0);
-
-    // The figure: skeleton, garment simulation, shell fur.
-    const figure = new Character(scene, terrain, sky, shadows, character);
-    onChange("showCharacter", (v) => figure.setVisible(v));
-    figure.registerPrepass(depthPass);
-
-    // Airborne snow: footfall kick now, the surf plume and spell spray later.
+    // Airborne snow: footfall kick, the surf plume, spell spray, and every
+    // character's footfalls and blade. One pool, shared by the whole world.
     const spray = new SprayField(scene, terrain, sky, shadows);
 
-    // Feet and the surf groove write into the terrain state buffer through here.
-    const contact = new SnowContact(character, terrain.deform, figure.figure, spray);
+    // The player table. Each player owns its own controller, figure, sword, combo
+    // and snow contact — see `game/player.js`. Adding the other three is a
+    // `spawn()` call; the network will be a driver that writes their intents.
+    const world = new World({ scene, terrain, sky, shadows, spray, deform: terrain.deform });
+    const me = world.spawn({ name: "you", isLocal: true });
+    me.figure.registerPrepass(depthPass);
+    me.sword.registerPrepass(depthPass);
+
+    // Kept as names because a great deal of code below still reads the local
+    // player's parts directly — the camera, the wake, the spells and the overlay all
+    // follow *you*, not the world.
+    const character = me.controller;
+    const figure = me.figure;
+    const sword = me.sword;
+    const combat = me.combat;
+
+    onChange("showCharacter", (v) => {
+        figure.setVisible(v);
+        sword.setVisible(v && S.showSword !== false);
+    });
+    onChange("showSword", (v) => sword.setVisible(v && S.showCharacter !== false));
+
+    // Extra players, driven by a script rather than by input or by a socket. The
+    // same `Player` the local one is, so what this measures and what it looks like
+    // are both the real thing.
+    const crowd = new DummyCrowd(world, depthPass);
+    onChange("dummyCount", (v) => crowd.setCount(v));
 
     // The breaking wave, its bow crest and the plume it sheds.
     const wake = new SurfWake(scene, sky, shadows, character, spray, terrain);
@@ -153,9 +179,45 @@ async function boot() {
     // Every surface a spell can light.
     spells.addConsumers(
         terrain.material, figure.bodyMat, figure.clothMat,
-        wake.material, spray.material
+        wake.material, spray.material, sword.material
     );
     spells.registerPrepass(depthPass);
+
+    // Anyone can cast, so anyone needs the visuals. Hung on the world rather than
+    // passed down: the dummies reach for it, and a networked player's cast will too.
+    world.spellFx = spells;
+
+    // The visible half of a gameplay volume — currently the Snowball, which had a
+    // hitbox and no picture. See `vfx/volumeFx.js`.
+    const volumeFx = new VolumeFx(world.combat, spray);
+
+    // The visual spell system asks permission and reports what it played; the combat
+    // resolver owns the rules and spawns the volume that actually hurts people. The
+    // split is deliberate: the visuals hold shared GPU pools and cannot sensibly exist
+    // per player, while a gameplay volume must. If they ever disagree, the volume wins.
+    const _castOrigin = new Vector3();
+    const _castAim = new Vector3();
+    const _audioFwd = new Vector3();
+    spells.gate = {
+        allow: (id) => me.alive && !me.effects.locked && me.spellReady(id, world.now),
+        cast: (id) => {
+            const spell = SPELLS[id];
+            _castAim.copyFrom(spells.aim);
+            // Cone and burst come off the caster; sphere and field land where the
+            // reticle points, capped so a spell cannot be dropped across the map.
+            if (spell && (spell.kind === "sphere" || spell.kind === "field")) {
+                const reach = Math.min(25, spell.aimRange || 25);
+                _castOrigin.copyFrom(me.controller.position);
+                _castOrigin.addInPlace(_castAim.scale(reach));
+                _castOrigin.y = terrain.heightAt(_castOrigin.x, _castOrigin.z);
+                _castAim.copyFrom(spells.aim);
+            } else {
+                me.figure.figure.handPosition(0, _handOut, 0);
+                _castOrigin.set(_handOut[0], _handOut[1], _handOut[2]);
+            }
+            world.combat.cast(me, id, _castOrigin, _castAim);
+        },
+    };
 
     // The rig needs ground heights to keep the spring arm above the snow.
     rig.groundAt = (x, z) => terrain.heightAt(x, z);
@@ -163,7 +225,113 @@ async function boot() {
     const post = new PostChain(scene, rig.camera, depthPass, sky);
 
     const overlay = new Overlay({ rig, character });
-    initInput(canvas, { onToggleOverlay: () => overlay.toggle() });
+    const hud = new Hud(world);
+    const crosshair = new Crosshair();
+
+    // What a hit looks like: a burst, a light, a hitmarker and a kick. Reads the combat
+    // events, so it answers hits from anyone against anyone.
+    const impactFx = new ImpactFx(world, spray, spells.lights, rig, crosshair);
+
+    // ------------------------------------------------------------------- network
+    //
+    // A room in the URL means multiplayer; no room means single player, unchanged. The
+    // game is fully playable before the socket connects and stays playable if it drops,
+    // which is the only sane arrangement when the transport is a free tunnel.
+    /** @type {NetClient|null} */
+    let net = null;
+    const scoreboard = new Scoreboard(world, () => net);
+
+    /**
+     * A name for the nameplate.
+     *
+     * Remembered across sessions, because being asked to type a name every time you
+     * reload is worse than a name you did not choose. `?name=` wins if it is there, which
+     * is what makes it possible to hand someone a link that names them.
+     */
+    function playerName() {
+        const fromUrl = new URLSearchParams(location.search).get("name");
+        if (fromUrl) {
+            try { localStorage.setItem("snowflow.name", fromUrl); } catch { /* private mode */ }
+            return fromUrl;
+        }
+        try {
+            const saved = localStorage.getItem("snowflow.name");
+            if (saved) return saved;
+        } catch { /* private mode: fall through to a default */ }
+        return "rider";
+    }
+
+    const room = roomFromUrl();
+    if (room) {
+        net = new NetClient(world, {
+            room,
+            name: playerName(),
+            onStatus: (kind, detail) => {
+                if (kind === "joined") scoreboard.say("joined " + room);
+                else if (kind === "lost") scoreboard.say("connection lost — retrying");
+                else if (kind === "rejected") {
+                    scoreboard.say(detail && detail.why === "full"
+                        ? "that room is full"
+                        : "could not join: " + (detail && detail.why));
+                }
+            },
+            onEvent: (kind, data) => {
+                if (kind === "joined") scoreboard.say(data.name + " joined");
+                else if (kind === "left") scoreboard.say(data.name + " left");
+                else if (kind === "died") {
+                    const mine = data.by === net.localId || data.id === net.localId;
+                    scoreboard.say(
+                        data.killer ? data.killer + " → " + data.name : data.name + " died",
+                        mine
+                    );
+                } else if (kind === "cast") {
+                    // Somebody else's spell, replayed through the same two calls the local
+                    // player's cast makes: the resolver for the volume that hurts people,
+                    // the visual system for the picture. Both are needed — a spell that is
+                    // only drawn does nothing and a spell that is only resolved is
+                    // invisible — and going through the same entry points is what makes an
+                    // authoritative zone identical on all four clients.
+                    //
+                    // Not our own. The authority relays a cast to the whole room including
+                    // the caster, which is the right thing for it to do — it does not know
+                    // or care which clients have already drawn it — so the filtering
+                    // belongs here. Without it a local cast plays twice: two volumes, two
+                    // pictures, and the damage counted from both.
+                    if (data.by === net.localId) return;
+                    const caster = world.players.get(data.by);
+                    if (!caster) return;
+                    _castOrigin.set(data.o[0], data.o[1], data.o[2]);
+                    _castAim.set(data.a[0], data.a[1], data.a[2]);
+                    world.combat.cast(caster, data.s, _castOrigin, _castAim, true);
+                    spells.castAs(data.s, caster, _castAim, _castOrigin, 0.3);
+                }
+            },
+        });
+        net.connect();
+        scoreboard.showLink(shareLink(room));
+    } else {
+        // Offline, but the link is still worth showing: it is how a session becomes a
+        // game with other people in it, and inventing the code here means the host never
+        // has to think of one.
+        scoreboard.showLink(shareLink(makeRoomCode()));
+    }
+    // Declared inside the spell system's own light window — see `extraLights`. Declaring
+    // them from the frame loop instead put them either side of it: cleared before they
+    // were seen, or added after the materials had the frame's pool.
+    spells.extraLights = (dt) => impactFx.update(dt);
+    // Sound. Every buffer is synthesised at start, and start cannot happen before a user
+    // gesture — a browser will hand back a context stuck in `suspended` otherwise — so it
+    // hangs off the same click that locks the pointer.
+    const audio = new Audio();
+    initInput(canvas, {
+        onToggleOverlay: () => overlay.toggle(),
+        onLockChange: (locked) => {
+            crosshair.setVisible(locked);
+            if (locked) audio.resume();
+        },
+    });
+    onChange("volume", (v) => audio.setVolume(v));
+    onChange("sound", (v) => { audio.enabled = v; });
 
     // ------------------------------------------------------------- warm-up
     // Everything that can compile, compiles here — behind the loading screen.
@@ -175,6 +343,8 @@ async function boot() {
     figure.update(0);
     figure.sync(rig.camera.position);
     await figure.warmUp();
+    await sword.warmUp();
+    await me.trail.warmUp();
     spray.update(0, rig.camera.position);
     await spray.warmUp();
     await wake.warmUp();
@@ -219,17 +389,75 @@ async function boot() {
         // of it — the overlay labels them `cpu` for that reason.
         const tFrame = performance.now();
 
-        character.update(dt, rig);
-        terrain.heightfield.clampToPlayArea(character.position);
-        // Pose and simulate before the contact pass: the footprints are stamped
-        // at the boot's actual planted position, which only exists once the
-        // figure has been solved.
-        figure.update(dt);
-        contact.update(dt);
+        // Every player: locomotion, combo, figure, sword, contact — the order the
+        // single-player path used, now run per player. See `World.update`.
+        crowd.drive(dt, rig);
+        me.intent = input;
+        // Remote positions land *before* the world updates, so a remote figure is posed
+        // from where it is meant to be this frame rather than one frame behind. At four
+        // players in a fight that frame is a visible lag on everyone else's blade.
+        if (net) net.applyRemotes(world.now);
+        world.update(dt, rig, rig.camera.position);
         const tChar = performance.now();
 
         _vel.copyFrom(character.velocity);
         rig.update(dt, character.position, _vel, character.lean, character.speed01);
+        crosshair.update(dt, character);
+        hud.update(dt, rig);
+        // After the world, so this frame's hits are in the event list; before
+        // `endFrame`, which is what clears it.
+        if (net) net.update(dt);
+        scoreboard.setOpen(input.scoreboard);
+        scoreboard.update(dt);
+
+        // Sound reads the same event list the HUD and the impact effects do, and for the
+        // same reason: a hit is one thing that happened, and three systems answering it
+        // separately from three different sources would eventually disagree about whether
+        // it did.
+        audio.update(dt, character.speed01);
+        rig.getFlatForward(_audioFwd);
+        audio.listener(rig.camera.position, _audioFwd);
+        for (const e of world.combat.events) {
+            const mine = world.local && e.by === world.local.id;
+            if (e.kind === "hit") {
+                if (mine) audio.flat("hit", 0.55, 0.9 + Math.random() * 0.2);
+                else if (e.x !== undefined) audio.at("hit", e, rig.camera.position, 0.6);
+            } else if (e.kind === "clash") {
+                if (e.x !== undefined) audio.at("clash", e, rig.camera.position, 0.8);
+            } else if (e.kind === "spellHit" && e.x !== undefined) {
+                audio.at("hit", e, rig.camera.position, 0.45, 0.7);
+            } else if (e.kind === "cast") {
+                const caster = world.players.get(e.by);
+                if (mine) audio.flat("cast", 0.5);
+                else if (caster) audio.at("cast", caster.controller.position, rig.camera.position, 0.6);
+            } else if (e.kind === "death") {
+                const who = world.players.get(e.on);
+                if (who) audio.at("death", who.controller.position, rig.camera.position, 0.7);
+            }
+        }
+        // Footfalls and landings come off the controllers rather than off events, because
+        // they are not combat and nothing else needs to know about them.
+        for (const p of world.players.values()) {
+            const c = p.controller;
+            if (c.footfall) {
+                const g = 0.16 + 0.34 * c.footImpact;
+                if (p === world.local) audio.flat("step", g, 0.92 + Math.random() * 0.16);
+                else audio.at("step", c.footPos, rig.camera.position, g * 1.4, 0.92 + Math.random() * 0.16);
+            }
+            if (c.landed) {
+                if (p === world.local) audio.flat("land", 0.5);
+                else audio.at("land", c.position, rig.camera.position, 0.6);
+            }
+            // The swing, on the frame the strike opens.
+            if (p.combat.stage > 0 && p.combat.t > 0 && p._sfxStage !== p.combat.stage) {
+                p._sfxStage = p.combat.stage;
+                const heavy = p.combat.stage >= 3;
+                if (p === world.local) audio.flat("swing", heavy ? 0.4 : 0.3, heavy ? 0.82 : 1.05);
+                else audio.at("swing", c.position, rig.camera.position, 0.45, heavy ? 0.82 : 1.05);
+            } else if (p.combat.stage === 0) {
+                p._sfxStage = 0;
+            }
+        }
 
         // Jitters the projection and republishes everything the screen-space
         // passes derive from the camera. Must be after the rig has moved and
@@ -243,12 +471,13 @@ async function boot() {
         // cascade matrices; before the terrain, so the brushes every spell
         // writes are in the staging array when the simulation pass runs.
         spells.update(dt, rig.camera.position);
+        volumeFx.update(dt);
         const tSpells = performance.now();
         terrain.update(rig.camera.position, character.position, dt);
         const tTerrain = performance.now();
         // After the shadow refit, so the figure's uniforms carry this frame's
         // cascade matrices rather than last frame's.
-        figure.sync(rig.camera.position);
+        world.sync(rig.camera.position);
         // Before the spray: the wake decides where its own lip is, and the
         // grains it sheds have to be in the pool before the pool is uploaded.
         wake.update(dt, rig.camera.position);
@@ -270,7 +499,7 @@ async function boot() {
         endFrameDraws();
         stats.triangles =
             (terrain.mesh.metadata ? terrain.mesh.metadata.triangles : 0) +
-            (S.showCharacter ? figure.triangles : 0) +
+            (S.showCharacter ? world.triangles : 0) +
             (wake.mesh.isVisible ? wake.mesh.metadata.triangles : 0) +
             spells.triangles +
             spray.liveCount * 2;
@@ -279,6 +508,7 @@ async function boot() {
         checkSpike(dtMs);
         overlay.update(dtMs, engine);
 
+        world.endFrame();
         endFrame();
     });
 
@@ -286,13 +516,20 @@ async function boot() {
     setTimeout(() => overlay.resetSpikes(), 800);
 
     globalThis.SNOWFLOW = {
-        engine, scene, rig, character, figure, contact, spray, wake, spells,
-        overlay, terrain, sky, shadows, post, depthPass,
+        engine, scene, rig, spray, wake, spells,
+        overlay, hud, terrain, sky, shadows, post, depthPass, crowd, world, volumeFx, impactFx,
+        scoreboard, audio, get net() { return net; },
+        // The local player's parts, for the console. `world.players` has everyone.
+        me, character, figure, sword, combat, contact: me.contact,
         S, input, perfStats: stats,
     };
 }
 
 boot().catch((err) => {
     console.error(err);
-    loading.fail("Startup failed — see console.");
+    // Say what actually went wrong. The generic message this used to show sent the
+    // reader looking for a WebGPU problem whenever any part of boot threw, which is
+    // the opposite of helpful.
+    const what = err && err.message ? err.message : String(err);
+    loading.fail("Startup failed: " + what);
 });

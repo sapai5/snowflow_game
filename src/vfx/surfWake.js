@@ -277,8 +277,9 @@ export class SurfWake {
 
         // Below a walking pace there is nothing being displaced, and laying
         // samples anyway leaves a knot of overlapping wall wherever the player
-        // coasted to a stop.
-        const active = ch.surf > 0.06 && ch.speed > 1.6;
+        // coasted to a stop. Airborne there is no contact at all: the wave has
+        // to stop at the lip, and pick up again where the board lands.
+        const active = ch.surf > 0.06 && ch.speed > 1.6 && !ch.airborne;
 
         if (active) {
             if (!this._active) this._maybeRestart();
@@ -448,7 +449,7 @@ export class SurfWake {
         const ch = this.controller;
         const sp = this.spray;
         const n = this._count;
-        if (n < 3 || ch.surf < 0.15 || ch.speed < 3.0) {
+        if (n < 3 || ch.surf < 0.15 || ch.speed < 3.0 || ch.airborne) {
             this._plumeOwed = 0;
             return;
         }

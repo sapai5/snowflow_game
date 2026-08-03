@@ -102,7 +102,25 @@ export const S = {
     // --------------------------------------------------------------- systems
     showTerrain: true,
     showCharacter: true,
+    /**
+     * Phase 0 measurement harness: extra characters, walked in a ring, to price a
+     * crowd before the multiplayer work commits to a player count. See
+     * `src/dev/dummies.js`. Costs nothing at 0.
+     */
+    dummyCount: 0,
+    showSword: true,
+    /**
+     * How hard the light inside the blade reads. 0 is plain, unlit ice — which is
+     * also very nearly invisible against a snowfield, so the default is above 1.
+     */
+    swordGlow: 1.4,
+    /** Brightness of the ice-and-gold contrail behind a swing. 0 turns it off. */
+    swordTrail: 1.0,
     showWake: true,
+
+    /** Sound on, and how loud. Synthesised at load; see `audio/audio.js`. */
+    sound: true,
+    volume: 0.7,
     showLightShafts: true,
     wireframe: false,
     freezeTime: false,
@@ -202,6 +220,12 @@ export const SCHEMA = [
         items: [
             { k: "showTerrain", l: "Terrain", t: "b" },
             { k: "showCharacter", l: "Character", t: "b" },
+            { k: "dummyCount", l: "Dummy players", t: "f", min: 0, max: 7, step: 1 },
+            { k: "showSword", l: "Ice sword", t: "b" },
+            { k: "swordGlow", l: "Blade glow", t: "f", min: 0, max: 3, step: 0.01 },
+            { k: "swordTrail", l: "Swing trail", t: "f", min: 0, max: 3, step: 0.01 },
+            { k: "sound", l: "Sound", t: "b" },
+            { k: "volume", l: "Volume", t: "f", min: 0, max: 1, step: 0.01 },
             { k: "wireframe", l: "Wireframe", t: "b" },
             { k: "freezeTime", l: "Freeze time", t: "b" },
             { k: "resolutionScale", l: "Resolution", t: "f", min: 0.5, max: 1.5, step: 0.05 },

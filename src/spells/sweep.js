@@ -71,7 +71,8 @@ export class Sweep {
     /** @param {number} ax @param {number} az flat aim direction */
     trigger(ax, az) {
         const ctx = this.ctx;
-        const ch = ctx.controller;
+        // Whoever is casting: the local player unless someone else was handed in.
+        const ch = ctx.caster || ctx.controller;
 
         // A recast restarts rather than stacking: two crescents from the same
         // point are one crescent with a seam in it.
