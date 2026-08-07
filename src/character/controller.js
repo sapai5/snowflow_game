@@ -352,6 +352,16 @@ export class CharacterController {
          */
         this.swingGrip = 0;
         /**
+         * Movement authority granted by the current attack phase, 1 when unimpeded.
+         *
+         * Written by the combo, shaped per phase — wind-up 0.5, strike 0.2, recovery
+         * ramping back — and weighted here by `swingBlend` so entering and leaving an
+         * attack eases rather than steps. The steps *between* phases need no filter of
+         * their own: they move the speed cap, and velocity approaches the cap at the
+         * walk accel/decel rates, which smooths them for free.
+         */
+        this.swingMove = 1;
+        /**
          * How much of a chained wind-up is still to travel, 1 down to 0.
          *
          * While it is non-zero the figure interpolates the hand's direction *between
@@ -848,7 +858,7 @@ export class CharacterController {
         // Status effects multiply on top rather than replacing it: being slowed while
         // mid-swing should be slower than either alone, and treating them as separate
         // caps would let the larger one hide the other.
-        const swing = 1 - 0.80 * this.swingBlend;
+        const swing = 1 - (1 - this.swingMove) * this.swingBlend;
         const maxSpeed = (input.sprint ? RUN_SPEED : WALK_SPEED) * swing * this.moveScale;
 
         _wish.set(

@@ -54,9 +54,8 @@
  * single flag, and the buffer may only open the next attack when the current one
  * reaches its recovery or ends. A mashed button can never break a swing mid-arc.
  *
- * Clicks during the wind-up are dropped rather than buffered. Before the strike has
- * released, "again" is not yet a meaningful instruction, and honouring it turns a
- * double-click into an attack the player never saw start.
+ * Clicks during any phase of a running attack are buffered into one flag and consumed
+ * when the strike ends, so mashing advances the string and never restarts or breaks it.
  *
  * Allocation per frame: none.
  */
@@ -108,8 +107,6 @@ const STAGES = [
         // arc is 101 degrees, so 0.70 half-sweeps is ~35 degrees of blade travel
         // past centre before it catches itself.
         followThrough: 0.70,
-        // Slow-motion at contact, and its length. Not a freeze — see `HITSTOP_RATE`.
-        hitstop: 0.045,
     },
     {
         // The return stroke. Chained, most of this wind-up never plays — the
@@ -118,7 +115,6 @@ const STAGES = [
         windup: 0.23, strike: 0.32, recover: 0.26,
         drive: 2.2, plane: 3, snap: 0.50, set: 0.55, stomp: 0.45, trauma: 0.13,
         followThrough: 0.62,
-        hitstop: 0.05,
     },
     {
         // The finisher's anticipation is a *long slow coil*, not a hitch. It used
@@ -145,7 +141,6 @@ const STAGES = [
         // finished a vertical cut has run out of shoulder, not out of momentum, and the
         // envelope clamp catches it if this is ever raised too far.
         followThrough: 0.51,
-        hitstop: 0.075,
     },
 ];
 
@@ -333,7 +328,15 @@ export class SwordCombat {
         if (input.attackPressed && allowed) {
             if (this.stage === 0) {
                 this._begin(this._nextStage());
-            } else if (this.t >= STAGES[this.stage - 1].windup) {
+            } else {
+                // Any click during an attack queues the next stroke — including clicks
+                // during the wind-up, which used to be dropped on the theory that "again"
+                // is not meaningful before the strike has released. That theory was
+                // written against 0.12 s wind-ups; at 0.20–0.50 s it made a third of the
+                // string input-dead, and an input that sometimes counts and sometimes
+                // does not is the textbook mechanism of "feels unresponsive". A single
+                // flag consumed at strike-end means a double-click is exactly this attack
+                // plus the next one queued, which is what a double-click means everywhere.
                 this.queued = true;
             }
         }
@@ -504,8 +507,14 @@ export class SwordCombat {
      */
     _impact(s, rig) {
         this.ch.slashHit = true;
-        this.ch.hitstop = s.hitstop;
         rig.addTrauma(s.trauma);
+        // No hit-stop here, deliberately. This fires on every swing at the velocity
+        // peak whether or not anything was struck — it is where the terrain cut and
+        // the camera kick belong — and the phase-timed hit-stop it used to apply gave
+        // every *whiffed* swing a 45–75 ms slow-motion hiccup, indistinguishable from
+        // a dropped frame. Hit-stop is a statement that contact happened, so it lives
+        // in the resolver, which is the only thing that knows whether it did; landed
+        // hits were also stacking that contact stop on top of this one.
     }
 
     /**
@@ -537,6 +546,8 @@ export class SwordCombat {
         let snap = 0;
         let gripWant = 0;
         let bridge = 0;
+        // Movement authority, published for the controller. 1 means unimpeded.
+        let move = 1;
 
         if (this.stage > 0) {
             const s = STAGES[this.stage - 1];
@@ -550,6 +561,11 @@ export class SwordCombat {
 
             if (t < tStrike) {
                 const u = t / s.windup;
+                // Half authority while aiming. The flat 20% this used to be treated the
+                // wind-up like the strike, and the wind-up is where the player is still
+                // *placing* the attack — walking it onto a strafing target is the skill
+                // the long wind-ups exist to reward.
+                move = 0.5;
                 // The off hand joins during the coil and is gone by the end of the
                 // recovery, so the two-handed grip is part of the anticipation rather
                 // than something that appears at the moment of contact.
@@ -571,6 +587,10 @@ export class SwordCombat {
                 shift = -easeOutCubic(u);
             } else if (t < tRecover) {
                 const u = (t - tStrike) / s.strike;
+                // Committed: the strike keeps the old lock in full. This is the phase
+                // where planting the feet is the point, and it is also the parry window,
+                // so mobility here is a balance number rather than a feel number.
+                move = 0.2;
                 gripWant = s.twoHand ? 1 : 0;
                 // The uncoil and the overshoot in one curve: leaves the coil already
                 // moving, fastest around two thirds, through the target line at the
@@ -584,6 +604,13 @@ export class SwordCombat {
                 shift = -1 + 2 * easeOutQuad(Math.min(1, u * 1.6));
             } else {
                 const u = (t - tRecover) / s.recover;
+                // Footwork comes back across the recovery rather than after it. The
+                // flat lock held the player at 20% authority through the whole recovery
+                // and then the blend release and re-acceleration stacked on top — about
+                // 0.8 s below half speed for one whiffed jab. Recovery still costs (you
+                // cannot sprint out of a whiff, and the chain-cancel is unaffected),
+                // but a drift is a fight continuing where a freeze is a fight pausing.
+                move = 0.35 + 0.45 * u;
                 // The recovery is a cubic Hermite that *starts at exactly the
                 // velocity the strike ended with*. So the blade carries through the
                 // finish, tops out a little past it, and comes back to guard: one
@@ -618,7 +645,10 @@ export class SwordCombat {
         }
 
         const on = allowed ? 1 : 0;
-        ch.swingBlend = expDamp(ch.swingBlend, want * on, want > ch.swingBlend ? 30 : 12, h);
+        // Release at 20 rather than 12: the pose easing out over a fifth of a second was
+        // a third layer of movement lock stacked after the recovery had already ended.
+        ch.swingBlend = expDamp(ch.swingBlend, want * on, want > ch.swingBlend ? 30 : 20, h);
+        ch.swingMove = move;
         // Barely filtered: the curve is already continuous, and a slow filter here
         // would flatten the acceleration that is the whole point of it.
         ch.swingArc = expDamp(ch.swingArc, arc, 60, h);

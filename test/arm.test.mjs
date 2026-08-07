@@ -440,8 +440,13 @@ export async function runContinuity() {
         const it = makeIntent();
         const dt = 1 / 60;
 
-        // Bridge activity seen during each stage's wind-up.
+        // Bridge activity seen during each stage's wind-up, and the source plane at the
+        // same moment. Sampled *during* the bridged wind-ups rather than at the end of
+        // the run: a mashed string wraps back to a fresh opener, and an opener correctly
+        // bridges from nothing — so an end-of-run sample reads whatever the loop happened
+        // to finish on, which is a coin toss rather than an assertion.
         const seen = new Map();
+        const fromPlanes = new Map();
         for (let f = 0; f < 240; f++) {
             // Mash, so the string chains all the way through.
             it.attackPressed = f % 6 === 0;
@@ -450,6 +455,7 @@ export async function runContinuity() {
             const timing = sc.stageTiming;
             if (s > 0 && timing && sc.t < timing.windup) {
                 seen.set(s, Math.max(seen.get(s) || 0, ch.swingBridge));
+                fromPlanes.set(s, Math.max(fromPlanes.get(s) || 0, ch.swingFromPlane));
             }
         }
 
@@ -458,8 +464,8 @@ export async function runContinuity() {
             (seen.get(2) || 0).toFixed(2));
         ok((seen.get(3) || 0) > 0.5,
             "and so is the finisher's, peak " + (seen.get(3) || 0).toFixed(2));
-        ok(ch.swingFromPlane > 0,
-            "with the plane it is bridging from recorded, got " + ch.swingFromPlane);
+        ok((fromPlanes.get(2) || 0) > 0 && (fromPlanes.get(3) || 0) > 0,
+            "with the plane each is bridging from recorded while it runs");
 
         // A *cold* opener has nothing to bridge from: the blade is at guard, not mid-combo.
         const ch2 = { ...ch, swingBridge: 0, swingFromPlane: 0, swingArc: 0, swingBlend: 0 };
