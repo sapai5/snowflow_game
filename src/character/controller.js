@@ -362,6 +362,17 @@ export class CharacterController {
          */
         this.swingMove = 1;
         /**
+         * Flinch, 0..1, decaying.
+         *
+         * Set by the resolver when this body is struck or staggered; read by the figure,
+         * which hunches the trunk and dips the hips by it. It exists because a stagger
+         * was a full input lock on a figure standing in its idle pose — mechanically the
+         * parry reward, visually indistinguishable from the game hanging — and because
+         * two players trading light hits looked like mannequins exchanging particle
+         * effects: every cue was *around* the body and none was in it.
+         */
+        this.flinch = 0;
+        /**
          * How much of a chained wind-up is still to travel, 1 down to 0.
          *
          * While it is non-zero the figure interpolates the hand's direction *between
@@ -464,6 +475,8 @@ export class CharacterController {
         this.slashHit = false;
         this.stompHit = false;
         this.hitstop = Math.max(0, this.hitstop - h);
+        // Linear rather than exponential: a flinch should end, not asymptote.
+        this.flinch = Math.max(0, this.flinch - 4 * h);
 
         // Ease the surf blend — entering and exiting are transitions, not switches.
         this.surf = expDamp(this.surf, this.surfActive ? 1 : 0, this.surfActive ? 2.6 : 3.4, h);
@@ -572,6 +585,7 @@ export class CharacterController {
         this.slashHit = false;
         this.stompHit = false;
         this.hitstop = Math.max(0, this.hitstop - h);
+        this.flinch = Math.max(0, this.flinch - 4 * h);
         this.plow = Math.max(0, this.plow - PLOW_RECOVER * h);
 
         // Blended locally from the flag rather than sent as a blend value: it is a

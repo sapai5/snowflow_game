@@ -199,7 +199,9 @@ async function boot() {
     const _castAim = new Vector3();
     const _audioFwd = new Vector3();
     spells.gate = {
-        allow: (id) => me.alive && !me.effects.locked && me.spellReady(id, world.now),
+        allow: (id) =>
+            me.alive && !me.effects.locked && !me.combat.isAttacking &&
+            me.spellReady(id, world.now),
         cast: (id) => {
             const spell = SPELLS[id];
             _castAim.copyFrom(spells.aim);

@@ -923,7 +923,11 @@ export class Figure {
             // The body goes with the strike, in proportion to how committed the
             // attack is: the jab leans a little, the finisher goes over the front
             // foot behind the blade.
-            + 0.26 * ch.swingSet * clamp(ch.swingArc, 0, 1);
+            + 0.26 * ch.swingSet * clamp(ch.swingArc, 0, 1)
+            // Flinch: hunch forward over the blow. Squared so the onset is sharp and
+            // the tail is gentle — the trunk damp below rounds the front edge into
+            // something a spine would do.
+            + 0.30 * ch.flinch * ch.flinch;
         this.pitch = damp(this.pitch, pitchWant, 7, h);
 
         const rollWant = ch.lean * (0.16 + 0.34 * surf);
@@ -998,7 +1002,11 @@ export class Figure {
             // late, so it finishes low and grounded rather than standing up out of
             // the follow-through. A little deeper still through the strike itself.
             + 0.075 * ch.swingSet
-            + 0.035 * ch.swingBlend * Math.sin(Math.PI * clamp((ch.swingArc + 1) * 0.5, 0, 1));
+            + 0.035 * ch.swingBlend * Math.sin(Math.PI * clamp((ch.swingArc + 1) * 0.5, 0, 1))
+            // The flinch dips the hips with the hunch: a blow lands in the knees as
+            // much as the spine, and a hunch without the dip pivots the figure like a
+            // hinged doll.
+            + 0.10 * ch.flinch * ch.flinch;
         this.hipY = damp(this.hipY, HIP_HEIGHT - crouch, 9, h);
 
         // The figure settles into the snow it is standing on. Reading the real

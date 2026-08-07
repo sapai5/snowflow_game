@@ -39,6 +39,8 @@ export function mkPlayer(id, x = 0, z = 0) {
             // Hit-stop lives on the controller because the phase clock, the pose
             // springs and the blade's whip all have to slow by the same factor.
             hitstop: 0,
+            // A flinch on the body, set by the resolver on hits and staggers.
+            flinch: 0,
             update() {},
         },
         combat: {

@@ -239,6 +239,12 @@ export class CombatResolver {
                     if (stage >= 3) {
                         target.effects.apply(STAGGER, 1, FINISHER_STAGGER, attacker.id);
                     }
+                    // The body registers the blow, scaled to it. Not set inside `damage`,
+                    // because burn ticks route through there too and a field flinching
+                    // its occupant six times a second is a seizure, not a reaction.
+                    target.controller.flinch = Math.max(
+                        target.controller.flinch, stage >= 3 ? 1 : 0.45
+                    );
 
                     // Hit-stop on *contact*, which is not the same thing as the
                     // phase-timed one the combo already applies. That one fires on
@@ -414,6 +420,11 @@ export class CombatResolver {
         _hitAt.y += 1.2;
         a.effects.apply(STAGGER, 1, CLASH_STAGGER, b.id);
         b.effects.apply(STAGGER, 1, CLASH_STAGGER, a.id);
+        // Both bodies say so. The stagger is a half-second input lock, and a lock on a
+        // figure standing in its idle pose is the same picture as a hang; the flinch is
+        // what makes it read as "staggered" rather than "frozen".
+        a.controller.flinch = 1;
+        b.controller.flinch = 1;
         a.combat.interrupt();
         b.combat.interrupt();
         // Push the blades apart through the spring that already models their inertia,
@@ -446,6 +457,12 @@ export class CombatResolver {
     cast(caster, spellId, origin, aim, relayed) {
         const spell = SPELLS[spellId];
         if (!spell || !caster.alive || caster.effects.locked) return false;
+        // Not mid-swing. The casting gesture and the sword arm want the same arm, and a
+        // ribbon conjured out of a hand that is currently driving a finisher reads as
+        // neither. Relayed casts skip this the way they skip the cooldown: the caster's
+        // own client already ruled, and this client's view of their swing may be a
+        // snapshot behind.
+        if (!relayed && caster.combat && caster.combat.stage > 0) return false;
         if (!relayed && !caster.spellReady(spellId, this.world.now)) return false;
 
         caster.startCooldown(spellId, this.world.now);
@@ -579,6 +596,9 @@ export class CombatResolver {
                     target.effects.apply(
                         spell.effect.type, spell.effect.magnitude, spell.effect.seconds, v.ownerId
                     );
+                }
+                if (spell.damage > 0 || spell.knockback > 0) {
+                    target.controller.flinch = Math.max(target.controller.flinch, 0.6);
                 }
                 this.events.push({
                     kind: "spellHit", by: v.ownerId, on: target.id, spell: spell.id,

@@ -292,6 +292,10 @@ export class NetClient {
         // desync the bar permanently.
         p.health = m.hp;
         if (m.by && m.by !== m.id) p.flash = 1;
+        // The body reacts on every client, not only the one that resolved the hit. The
+        // ruling is the one message guaranteed to reach everyone, so it doubles as the
+        // flinch trigger for remote victims.
+        if (m.d > 0) p.controller.flinch = Math.max(p.controller.flinch, 0.5);
         // The shove, applied by the only client entitled to move this player. Ours is
         // the only one that will find itself here, because the authority sends the
         // impulse to everyone and everyone else ignores it.
