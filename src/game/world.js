@@ -62,6 +62,13 @@ export class World {
 
         // Around a ring, so four players start apart but within sight of each other
         // rather than scattered across a square kilometre.
+        // Soft aim tracking during wind-ups needs to know who is nearby, and the combo
+        // deliberately has no access to the player table — so the world hands it a
+        // closure. Remote players are excluded at call time rather than at spawn time,
+        // because the remote flag is set after spawn: their facing comes off the wire,
+        // and a locally-tracked goal would fight it every frame.
+        p.combat.findTarget = () => (p.remote ? null : this._nearestFoe(p));
+
         const i = this._spawnIndex++;
         const theta = (i / 4) * Math.PI * 2;
         this._spawn.set(Math.cos(theta) * SPAWN_RADIUS, 0, Math.sin(theta) * SPAWN_RADIUS);
@@ -156,6 +163,32 @@ export class World {
             this._spawn.set(Math.cos(best) * SPAWN_RADIUS, 0, Math.sin(best) * SPAWN_RADIUS);
             p.respawn(this._spawn, best + Math.PI);
         }
+    }
+
+    /**
+     * The nearest living opponent, for the combo's soft tracking.
+     *
+     * Bare nearest-by-distance: the cone and range tests live in the combo, next to the
+     * constants that define them, so this stays a lookup rather than half of a policy
+     * split across two files.
+     *
+     * @param {Player} self
+     * @returns {Player|null}
+     */
+    _nearestFoe(self) {
+        let best = null;
+        let bestD2 = Infinity;
+        for (const q of this.players.values()) {
+            if (q === self || !q.alive) continue;
+            const d2 = Vector3.DistanceSquared(
+                self.controller.position, q.controller.position
+            );
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = q;
+            }
+        }
+        return best;
     }
 
     /**

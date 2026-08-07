@@ -62,7 +62,7 @@
 
 import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import { expDamp } from "../core/camera.js";
-import { angleDamp } from "./controller.js";
+import { angleDamp, angleDelta } from "./controller.js";
 
 /**
  * Every phase of every attack, in seconds, plus what each attack commits.
@@ -220,6 +220,26 @@ const WINDUP_POWER = 1.7;
 const WINDUP_FLOOR = 0.30;
 
 /**
+ * Soft target tracking during the wind-up: range and half-cone.
+ *
+ * The wind-ups were lengthened so an attack could be seen and answered, and that bought a
+ * problem: a strafing opponent at 3.6 m/s covers 0.72 m during a jab's wind-up and 1.8 m
+ * during the finisher's, against a reach of 1.48 m — so without tracking, the deliberate
+ * pacing converts directly into whiffs unless the player mouse-follows the strafe by hand.
+ * Attacks that miss for no visible reason read as clunk, not as skill.
+ *
+ * So during the wind-up — and only the wind-up — the facing goal becomes the bearing to a
+ * target that is close and roughly where the player is already aiming. The cone is the
+ * honesty bound: the attack never rotates more than this far from where the player
+ * actually pointed, so it assists aim rather than replacing it. No tracking during the
+ * strike, ever — the swept blade and the parry geometry stay honest, and side-stepping a
+ * committed swing keeps working. Track the start-up, commit the active frames: that is the
+ * contract the genre reference uses.
+ */
+const TRACK_RANGE = 5;
+const TRACK_CONE = (35 * Math.PI) / 180;
+
+/**
  * Time scale during the hit-stop. Slow motion, not a freeze.
  *
  * At 0.05 this was a hard stop of one to three frames, and however good that is on
@@ -271,6 +291,18 @@ export class SwordCombat {
         /** The plane and arc the blade is bridged *from* during a chained wind-up. */
         this._fromPlane = 0;
         this._fromArc = 0;
+
+        /**
+         * Who this combatant might be swinging at: a callback returning the nearest
+         * living opponent, or null.
+         *
+         * Injected by the world rather than imported, because this file deliberately
+         * knows nothing about the player table — it is also what lets the tests hand in
+         * a fixed target and assert the cone geometry without standing up a world.
+         *
+         * @type {(() => { controller: { position: {x:number,z:number} } } | null) | null}
+         */
+        this.findTarget = null;
     }
 
     /** True from the frame an attack begins to the frame it ends. */
@@ -365,7 +397,26 @@ export class SwordCombat {
                 const aim = input.aimYaw === null || input.aimYaw === undefined
                     ? rig.yaw
                     : input.aimYaw;
-                ch.facing = angleDamp(ch.facing, aim, 16, h);
+                // Soft tracking: if somebody is close and roughly down the aim line, the
+                // goal is *them* rather than the abstract aim direction. Bounded by the
+                // cone, so the attack can never rotate further from the player's actual
+                // aim than TRACK_CONE — see the constants for why this exists at all.
+                let goal = aim;
+                if (this.findTarget) {
+                    const foe = this.findTarget();
+                    if (foe) {
+                        const dx = foe.controller.position.x - ch.position.x;
+                        const dz = foe.controller.position.z - ch.position.z;
+                        const d2 = dx * dx + dz * dz;
+                        if (d2 > 1e-6 && d2 <= TRACK_RANGE * TRACK_RANGE) {
+                            const bearing = Math.atan2(dx, dz);
+                            if (Math.abs(angleDelta(aim, bearing)) <= TRACK_CONE) {
+                                goal = bearing;
+                            }
+                        }
+                    }
+                }
+                ch.facing = angleDamp(ch.facing, goal, 16, h);
             }
 
             // The legs go at the start of the uncoil; the edge arrives near the end
