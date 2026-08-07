@@ -136,14 +136,26 @@ the existing `hit` event.
 
 ## Plan
 
-| Priority | Change | Size |
+| Priority | Change | State |
 |---|---|---|
-| **P0** | Buffer wind-up clicks | ~3 lines + tests |
-| **P0** | Remove whiff hit-stop, keep contact hit-stop | ~5 lines + tests |
-| **P0** | Phase-shaped movement authority + faster release | ~20 lines + tests |
-| **P1** | Soft target tracking during wind-up | ~40 lines + tests |
-| **P1** | Stagger flinch through the lag springs | ~30 lines |
-| **P2** | Victim flinch on hits; gate casting while swinging | ~20 lines |
+| **P0** | Buffer wind-up clicks | **done** — `5a7b659` |
+| **P0** | Remove whiff hit-stop, keep contact hit-stop | **done** — `5a7b659` |
+| **P0** | Phase-shaped movement authority + faster release | **done** — `5a7b659` |
+| **P1** | Soft target tracking during wind-up | **done** — `48aeae6` |
+| **P1** | Stagger flinch | **done** — `be56b0d` |
+| **P2** | Victim flinch on hits; gate casting while swinging | **done** — `be56b0d` |
+
+All six landed, with 30 assertions across `feel`, `feel · tracking` and
+`feel · flinch`, each verified by removing the fix and watching the right ones fail.
+746 in total.
+
+The flinch was built through the pitch and hip-crouch channels the figure already sums
+rather than through the lag springs the plan guessed at — those carry the swing's phase
+chain, and injecting a one-shot into them would have fought the arc mid-stroke. Same
+outcome, fewer moving parts.
+
+**Not implemented, awaiting a decision: the dodge.** Still the one real scope question
+(i-frames? stamina? does it cancel a recovery?). Nothing above depends on it.
 
 Each lands as its own commit, testable headlessly (input-window arithmetic, hit-stop
 sources, authority-by-phase curves, tracking cone geometry). The three P0s are where
